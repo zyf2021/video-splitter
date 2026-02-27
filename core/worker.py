@@ -77,6 +77,13 @@ class ProcessingWorker(QObject):
                 self._log(f"[{job.filename}] Fatal error: {exc}")
                 self.signals.job_updated.emit(idx, job)
                 error_count += 1
+            except Exception as exc:  # pragma: no cover - defensive guard for runtime ffmpeg/OS issues
+                job.status = JobStatus.ERROR
+                job.error_message = str(exc)
+                job.progress = 0
+                self._log(f"[{job.filename}] Unexpected error: {exc}")
+                self.signals.job_updated.emit(idx, job)
+                error_count += 1
 
             self.signals.queue_progress.emit(idx + 1, len(self.jobs))
 
@@ -186,6 +193,8 @@ class ProcessingWorker(QObject):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
 
@@ -198,11 +207,13 @@ class ProcessingWorker(QObject):
             if not line:
                 continue
             if line.startswith("out_time_ms="):
-                out_time_ms = int(line.split("=", 1)[1])
-                self._update_progress(index, job, progress_offset, step_weight, duration, out_time_ms / 1_000_000)
+                out_time_ms = self._parse_out_time_ms(line.split("=", 1)[1])
+                if out_time_ms is not None:
+                    self._update_progress(index, job, progress_offset, step_weight, duration, out_time_ms / 1_000_000)
             elif line.startswith("out_time="):
-                out_time = line.split("=", 1)[1]
-                self._update_progress(index, job, progress_offset, step_weight, duration, self._parse_time(out_time))
+                out_time = self._parse_time(line.split("=", 1)[1])
+                if out_time is not None:
+                    self._update_progress(index, job, progress_offset, step_weight, duration, out_time)
             elif line.startswith("progress=") and line.endswith("end"):
                 job.progress = min(100, int((progress_offset + step_weight) * 100))
                 self.signals.job_updated.emit(index, job)
@@ -232,14 +243,30 @@ class ProcessingWorker(QObject):
         self.signals.job_updated.emit(index, job)
 
     @staticmethod
-    def _parse_time(raw_time: str) -> float:
+    def _parse_out_time_ms(raw_value: str) -> Optional[int]:
+        value = raw_value.strip()
+        if not value or value == "N/A":
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_time(raw_time: str) -> Optional[float]:
+        value = raw_time.strip()
+        if not value or value == "N/A":
+            return None
         # HH:MM:SS.ms
-        parts = raw_time.split(":")
+        parts = value.split(":")
         if len(parts) != 3:
-            return 0.0
-        h = float(parts[0])
-        m = float(parts[1])
-        s = float(parts[2])
+            return None
+        try:
+            h = float(parts[0])
+            m = float(parts[1])
+            s = float(parts[2])
+        except ValueError:
+            return None
         return h * 3600 + m * 60 + s
 
     def _log(self, message: str) -> None:

@@ -4,13 +4,12 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import QDir, QSettings, QThread
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QFileSystemModel
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QFileSystemModel,
     QFormLayout,
     QGridLayout,
     QGroupBox,

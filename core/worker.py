@@ -149,7 +149,7 @@ class ProcessingWorker(QObject):
                     self._log(f"[{job.filename}] Audio saved: {audio_output}")
 
             if step_name == "frames":
-                frames_dir = output_root / f"{Path(job.input_path).stem}_frames"
+                frames_dir = self._build_frames_output_dir(output_root, job)
                 ensure_output_dir(frames_dir)
                 pattern = frames_dir / f"frame_%06d.{self.options.frame_format}"
                 cmd = build_frames_command(self.options, job.input_path, str(pattern))
@@ -172,6 +172,12 @@ class ProcessingWorker(QObject):
 
     def _build_audio_output_path(self, output_root: Path, job: Job) -> Path:
         candidate = output_root / f"{Path(job.input_path).stem}.{self.options.audio_format}"
+        if self.options.overwrite_existing:
+            return candidate
+        return make_unique_path(candidate)
+
+    def _build_frames_output_dir(self, output_root: Path, job: Job) -> Path:
+        candidate = output_root / f"{Path(job.input_path).stem}_frames"
         if self.options.overwrite_existing:
             return candidate
         return make_unique_path(candidate)

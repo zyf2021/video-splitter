@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,18 @@ def run_test_mode() -> int:
     return 0 if jobs[0].status.value.startswith("Done") else 2
 
 
+
+def _configure_windows_qt_runtime() -> None:
+    """Apply safer Qt defaults for some Windows environments.
+
+    Helps avoid native startup crashes (0xC0000409) caused by GPU/OpenGL driver
+    issues with Qt widgets.
+    """
+    if os.name != "nt":
+        return
+    os.environ.setdefault("QT_OPENGL", "software")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Video Splitter")
     parser.add_argument("--test-run", action="store_true", help="Run one-file processing without GUI")
@@ -52,10 +65,13 @@ def main() -> int:
     if args.test_run:
         return run_test_mode()
 
+    from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
 
     from ui.main_window import MainWindow
 
+    _configure_windows_qt_runtime()
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

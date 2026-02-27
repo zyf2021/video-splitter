@@ -61,3 +61,21 @@ python main.py --test-run
 ```
 
 Результаты будут в `samples/out/`, итог печатается в консоль.
+
+
+## Если приложение падает сразу после запуска в Windows (код 0xC0000409)
+
+- В `main.py` уже включен software OpenGL режим для Qt (`QT_OPENGL=software`),
+  это снижает риск падений из-за видеодрайвера.
+- Обновите/переустановите драйвер видеокарты и Microsoft Visual C++ Redistributable 2015-2022.
+- Проверьте, что версии пакетов согласованы:
+  ```bash
+  pip install --upgrade pip
+  pip install --upgrade PyQt6 PyQt6-Qt6 PyQt6-sip
+  ```
+- Для диагностики плагинов Qt можно запустить:
+  ```bash
+  set QT_DEBUG_PLUGINS=1
+  python main.py
+  ```
+

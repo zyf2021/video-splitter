@@ -32,6 +32,9 @@ class ProcessingOptions:
     frame_format: str = "jpg"  # jpg|png
     resize_mode: str = "original"  # original|1280w|1920w
 
+    logo_path: str = ""
+    remove_old_logo: bool = True
+
 
 @dataclass
 class Job:

@@ -30,8 +30,18 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.ffmpeg import VIDEO_EXTENSIONS, detect_ffmpeg, ffprobe_from_ffmpeg, is_video_file
-from core.jobs import Job, JobStatus, ProcessingOptions
+from core.ffmpeg import (
+    LOGO_HEIGHT,
+    LOGO_LEFT,
+    LOGO_TOP,
+    LOGO_WIDTH,
+    VIDEO_EXTENSIONS,
+    detect_ffmpeg,
+    ffprobe_from_ffmpeg,
+    is_logo_file,
+    is_video_file,
+)
+from core.jobs import Job, ProcessingOptions
 from core.worker import ProcessingWorker
 
 
@@ -39,7 +49,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Video Splitter")
-        self.resize(1280, 760)
+        self.resize(1320, 800)
 
         self.jobs: list[Job] = []
         self._thread: QThread | None = None
@@ -79,10 +89,18 @@ class MainWindow(QMainWindow):
         self.tree.setRootIndex(self.fs_model.index(QDir.homePath()))
         self.tree.doubleClicked.connect(self._on_tree_double_click)
         self.tree.setAlternatingRowColors(True)
+        self.tree.setContextMenuPolicy(self.tree.contextMenuPolicy())
         for col in (1, 2, 3):
             self.tree.hideColumn(col)
         layout.addWidget(QLabel("File manager"))
         layout.addWidget(self.tree)
+
+        tree_buttons_layout = QHBoxLayout()
+        self.add_selected_btn = QPushButton("Add to Queue")
+        self.set_logo_from_tree_btn = QPushButton("Set as Logo")
+        tree_buttons_layout.addWidget(self.add_selected_btn)
+        tree_buttons_layout.addWidget(self.set_logo_from_tree_btn)
+        layout.addLayout(tree_buttons_layout)
 
         buttons_layout = QHBoxLayout()
         self.add_files_btn = QPushButton("Add files...")
@@ -104,6 +122,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Queue"))
         layout.addWidget(self.queue_table)
 
+        self.add_selected_btn.clicked.connect(self.add_selected_from_tree)
+        self.set_logo_from_tree_btn.clicked.connect(self.set_logo_from_tree)
         self.add_files_btn.clicked.connect(self.add_files)
         self.add_folder_btn.clicked.connect(self.add_folder)
         self.remove_btn.clicked.connect(self.remove_selected)
@@ -135,12 +155,31 @@ class MainWindow(QMainWindow):
         output_row_layout.addWidget(self.output_browse_btn)
 
         self.save_next_checkbox = QCheckBox("Save next to input file")
-        self.overwrite_checkbox = QCheckBox("Overwrite existing files")
 
         output_layout.addRow("Output folder", output_row)
         output_layout.addRow(self.save_next_checkbox)
-        output_layout.addRow(self.overwrite_checkbox)
         layout.addWidget(output_group)
+
+        logo_group = QGroupBox("Замена эмблемы")
+        logo_layout = QFormLayout(logo_group)
+        logo_row = QWidget()
+        logo_row_layout = QHBoxLayout(logo_row)
+        logo_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.logo_file_edit = QLineEdit()
+        self.logo_file_edit.setReadOnly(True)
+        self.logo_browse_btn = QPushButton("Выбрать...")
+        logo_row_layout.addWidget(self.logo_file_edit)
+        logo_row_layout.addWidget(self.logo_browse_btn)
+
+        self.logo_coords_edit = QLineEdit(f"x={LOGO_LEFT}, y={LOGO_TOP}, w={LOGO_WIDTH}, h={LOGO_HEIGHT}")
+        self.logo_coords_edit.setReadOnly(True)
+        self.delogo_checkbox = QCheckBox("Удалять старую эмблему (delogo)")
+        self.delogo_checkbox.setChecked(True)
+
+        logo_layout.addRow("Logo file", logo_row)
+        logo_layout.addRow("Coordinates", self.logo_coords_edit)
+        logo_layout.addRow(self.delogo_checkbox)
+        layout.addWidget(logo_group)
 
         audio_group = QGroupBox("Audio extraction")
         audio_layout = QFormLayout(audio_group)
@@ -203,6 +242,7 @@ class MainWindow(QMainWindow):
 
         self.ffmpeg_browse_btn.clicked.connect(self.browse_ffmpeg)
         self.output_browse_btn.clicked.connect(self.browse_output)
+        self.logo_browse_btn.clicked.connect(self.browse_logo)
         self.start_btn.clicked.connect(self.start_processing)
         self.stop_btn.clicked.connect(self.stop_processing)
         self.open_output_btn.clicked.connect(self.open_output_folder)
@@ -214,7 +254,8 @@ class MainWindow(QMainWindow):
         self.ffmpeg_path_edit.setText(str(ffmpeg_path))
         self.output_folder_edit.setText(str(self.settings.value("output_folder", "")))
         self.save_next_checkbox.setChecked(self.settings.value("save_next", False, type=bool))
-        self.overwrite_checkbox.setChecked(self.settings.value("overwrite", False, type=bool))
+        self.logo_file_edit.setText(str(self.settings.value("logo_path", "")))
+        self.delogo_checkbox.setChecked(self.settings.value("remove_old_logo", True, type=bool))
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_settings()
@@ -224,12 +265,31 @@ class MainWindow(QMainWindow):
         self.settings.setValue("ffmpeg_path", self.ffmpeg_path_edit.text().strip())
         self.settings.setValue("output_folder", self.output_folder_edit.text().strip())
         self.settings.setValue("save_next", self.save_next_checkbox.isChecked())
-        self.settings.setValue("overwrite", self.overwrite_checkbox.isChecked())
+        self.settings.setValue("logo_path", self.logo_file_edit.text().strip())
+        self.settings.setValue("remove_old_logo", self.delogo_checkbox.isChecked())
 
     def _on_tree_double_click(self, index) -> None:
         path = Path(self.fs_model.filePath(index))
         if path.is_file() and is_video_file(path):
             self._add_job(str(path))
+
+    def add_selected_from_tree(self) -> None:
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
+        path = Path(self.fs_model.filePath(index))
+        if path.is_file() and is_video_file(path):
+            self._add_job(str(path))
+
+    def set_logo_from_tree(self) -> None:
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
+        path = Path(self.fs_model.filePath(index))
+        if path.is_file() and is_logo_file(path):
+            self.logo_file_edit.setText(str(path))
+        else:
+            QMessageBox.warning(self, "Invalid logo", "Select PNG or WEBP file for logo")
 
     def add_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
@@ -288,6 +348,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.output_folder_edit.setText(folder)
 
+    def browse_logo(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select logo", "", "Images (*.png *.webp)")
+        if path:
+            self.logo_file_edit.setText(path)
+
     def _collect_options(self) -> ProcessingOptions:
         ffmpeg_path = self.ffmpeg_path_edit.text().strip() or "ffmpeg"
         return ProcessingOptions(
@@ -295,7 +360,7 @@ class MainWindow(QMainWindow):
             ffprobe_path=ffprobe_from_ffmpeg(ffmpeg_path),
             output_folder=self.output_folder_edit.text().strip(),
             save_next_to_input=self.save_next_checkbox.isChecked(),
-            overwrite_existing=self.overwrite_checkbox.isChecked(),
+            overwrite_existing=True,
             extract_audio=self.extract_audio_checkbox.isChecked(),
             audio_format=self.audio_format_combo.currentText(),
             audio_mode=self.audio_mode_combo.currentText(),
@@ -303,6 +368,8 @@ class MainWindow(QMainWindow):
             frame_interval_sec=self.interval_spin.value(),
             frame_format=self.image_format_combo.currentText(),
             resize_mode=self.resize_combo.currentText(),
+            logo_path=self.logo_file_edit.text().strip(),
+            remove_old_logo=self.delogo_checkbox.isChecked(),
         )
 
     def start_processing(self) -> None:
@@ -313,8 +380,8 @@ class MainWindow(QMainWindow):
             return
 
         options = self._collect_options()
-        if not options.extract_audio and not options.extract_frames:
-            QMessageBox.warning(self, "Nothing selected", "Enable audio extraction and/or frame extraction")
+        if not options.logo_path:
+            QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
             return
 
         self.total_progress.setMaximum(len(self.jobs))
@@ -358,11 +425,7 @@ class MainWindow(QMainWindow):
     def _on_finished(self, summary: dict) -> None:
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        message = (
-            f"Done: {summary['ok']}\n"
-            f"Errors: {summary['error']}\n"
-            f"Cancelled: {summary['cancelled']}"
-        )
+        message = f"Done: {summary['ok']}\nErrors: {summary['error']}\nCancelled: {summary['cancelled']}"
         self._append_log(message)
         QMessageBox.information(self, "Processing finished", message)
 

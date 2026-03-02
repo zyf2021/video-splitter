@@ -9,6 +9,12 @@ from typing import Optional
 from core.jobs import ProcessingOptions
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
+LOGO_EXTENSIONS = {".png", ".webp"}
+
+LOGO_LEFT = 1100
+LOGO_TOP = 280
+LOGO_WIDTH = 140
+LOGO_HEIGHT = 380
 
 
 class FFmpegError(RuntimeError):
@@ -17,6 +23,10 @@ class FFmpegError(RuntimeError):
 
 def is_video_file(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def is_logo_file(path: Path) -> bool:
+    return path.suffix.lower() in LOGO_EXTENSIONS
 
 
 def detect_ffmpeg() -> Optional[str]:
@@ -89,7 +99,18 @@ def make_unique_path(path: Path) -> Path:
     parent = path.parent
     index = 1
     while True:
-        candidate = parent / f"{stem}_{index}{suffix}"
+        candidate = parent / f"{stem}_{index:02d}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def make_unique_dir(path: Path) -> Path:
+    if not path.exists():
+        return path
+    index = 1
+    while True:
+        candidate = path.parent / f"{path.name}_{index:02d}"
         if not candidate.exists():
             return candidate
         index += 1
@@ -101,6 +122,81 @@ def resolve_output_root(input_path: str, options: ProcessingOptions) -> Path:
     if options.output_folder:
         return Path(options.output_folder)
     return Path(input_path).parent
+
+
+def build_overlay_command(
+    options: ProcessingOptions,
+    input_path: str,
+    logo_path: str,
+    output_file: str,
+) -> list[str]:
+    overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    filter_complex = (
+        f"[1:v]scale={LOGO_WIDTH}:{LOGO_HEIGHT}:force_original_aspect_ratio=decrease[lg];"
+        f"[0:v][lg]overlay={LOGO_LEFT}:{LOGO_TOP}:format=auto[v]"
+    )
+
+    return [
+        options.ffmpeg_path,
+        overwrite_flag,
+        "-i",
+        input_path,
+        "-i",
+        logo_path,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "medium",
+        "-c:a",
+        "copy",
+        output_file,
+    ]
+
+
+def build_delogo_overlay_command(
+    options: ProcessingOptions,
+    input_path: str,
+    logo_path: str,
+    output_file: str,
+) -> list[str]:
+    overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    filter_complex = (
+        f"[0:v]delogo=x={LOGO_LEFT}:y={LOGO_TOP}:w={LOGO_WIDTH}:h={LOGO_HEIGHT}:show=0[v0];"
+        f"[1:v]scale={LOGO_WIDTH}:{LOGO_HEIGHT}:force_original_aspect_ratio=decrease[lg];"
+        f"[v0][lg]overlay={LOGO_LEFT}:{LOGO_TOP}:format=auto[v]"
+    )
+
+    return [
+        options.ffmpeg_path,
+        overwrite_flag,
+        "-i",
+        input_path,
+        "-i",
+        logo_path,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "medium",
+        "-c:a",
+        "copy",
+        output_file,
+    ]
 
 
 def build_audio_command(

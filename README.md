@@ -22,7 +22,27 @@ Desktop-приложение для пакетной обработки виде
    ```bash
    pip install PyQt6
    ```
-3. Установите FFmpeg/FFprobe и добавьте их в `PATH`.
+3. Установите FFmpeg/FFprobe:
+   - **Windows**:
+     1. Скачайте архив с https://ffmpeg.org/download.html (или сборку gyan.dev).
+     2. Распакуйте, например, в `C:\ffmpeg`.
+     3. Добавьте `C:\ffmpeg\bin` в переменную среды `PATH`.
+   - **Ubuntu/Debian**:
+     ```bash
+     sudo apt update
+     sudo apt install -y ffmpeg
+     ```
+   - **macOS (Homebrew)**:
+     ```bash
+     brew install ffmpeg
+     ```
+
+4. Проверьте установку:
+   ```bash
+   ffmpeg -version
+   ffprobe -version
+   ```
+
 
 ## Запуск
 

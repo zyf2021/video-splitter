@@ -12,9 +12,9 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
 LOGO_EXTENSIONS = {".png", ".webp"}
 
 LOGO_LEFT = 1100
-LOGO_TOP = 280
+LOGO_TOP = 660
 LOGO_WIDTH = 140
-LOGO_HEIGHT = 380
+LOGO_HEIGHT = 20
 
 
 class FFmpegError(RuntimeError):

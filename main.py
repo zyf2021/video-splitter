@@ -13,9 +13,13 @@ from core.worker import ProcessingWorker
 def run_test_mode() -> int:
     input_file = Path("samples/input.mp4")
     output_dir = Path("samples/out")
+    logo_file = Path("samples/logo.png")
 
     if not input_file.exists():
         print(f"Test input is missing: {input_file}")
+        return 1
+    if not logo_file.exists():
+        print(f"Test logo is missing: {logo_file}")
         return 1
 
     ffmpeg_path = detect_ffmpeg() or "ffmpeg"
@@ -32,6 +36,8 @@ def run_test_mode() -> int:
         frame_interval_sec=10,
         frame_format="jpg",
         resize_mode="original",
+        logo_path=str(logo_file),
+        remove_old_logo=True,
     )
 
     jobs = [Job(input_path=str(input_file))]

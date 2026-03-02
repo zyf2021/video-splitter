@@ -1,18 +1,19 @@
 # Video Splitter (PyQt6 + FFmpeg)
 
-Небольшое desktop-приложение для Windows (и других ОС с Python 3.10+) для:
-- извлечения аудио из видео;
-- нарезки кадров каждые N секунд;
-- последовательной обработки очереди с логом и прогрессом.
+Desktop-приложение для пакетной обработки видео:
+- замена эмблемы/логотипа по фиксированной области (`x=1100,y=660,w=140,h=20`) через `delogo + overlay`;
+- извлечение аудио;
+- извлечение кадров раз в N секунд;
+- последовательная очередь с прогрессом и логом.
 
 ## Структура проекта
 
 - `main.py` — запуск GUI и `--test-run` режим.
 - `test_one.py` — быстрый запуск тестового сценария.
-- `ui/main_window.py` — интерфейс `QMainWindow`.
+- `ui/main_window.py` — интерфейс `QMainWindow` + файловый менеджер.
 - `core/jobs.py` — dataclass-модели задач и настроек.
-- `core/ffmpeg.py` — утилиты, проверки, сборка ffmpeg/ffprobe команд.
-- `core/worker.py` — фоновая обработка задач в `QThread`.
+- `core/ffmpeg.py` — сборка ffmpeg/ffprobe команд (overlay/delogo/audio/frames).
+- `core/worker.py` — фоновая обработка очереди в `QThread`.
 
 ## Установка
 
@@ -21,10 +22,27 @@
    ```bash
    pip install PyQt6
    ```
-3. Установите FFmpeg:
-   - Скачайте сборку с официального сайта: https://ffmpeg.org/download.html
-   - Добавьте папку с `ffmpeg.exe` и `ffprobe.exe` в `PATH`
-   - Либо укажите путь к `ffmpeg.exe` в интерфейсе (блок **FFmpeg**).
+3. Установите FFmpeg/FFprobe:
+   - **Windows**:
+     1. Скачайте архив с https://ffmpeg.org/download.html (или сборку gyan.dev).
+     2. Распакуйте, например, в `C:\ffmpeg`.
+     3. Добавьте `C:\ffmpeg\bin` в переменную среды `PATH`.
+   - **Ubuntu/Debian**:
+     ```bash
+     sudo apt update
+     sudo apt install -y ffmpeg
+     ```
+   - **macOS (Homebrew)**:
+     ```bash
+     brew install ffmpeg
+     ```
+
+4. Проверьте установку:
+   ```bash
+   ffmpeg -version
+   ffprobe -version
+   ```
+
 
 ## Запуск
 
@@ -32,21 +50,24 @@
 python main.py
 ```
 
-## Где что в UI
+## Выходная структура
 
-- **Левая колонка**
-  - `QTreeView` (проводник)
-  - Кнопки: `Add files...`, `Add folder...`, `Remove selected`, `Clear queue`
-  - Таблица очереди: `Filename`, `Status`, `Progress`, `Output`
-- **Правая колонка**
-  - **FFmpeg**: путь к `ffmpeg`
-  - **Output**: папка, чекбоксы `Save next to input file`, `Overwrite existing files`
-  - **Audio extraction**: включение, формат (`m4a/mp3/wav`), режим (`copy/transcode`)
-  - **Frame extraction**: включение, интервал, формат изображения, resize
-  - **Execution**: `Start`, `Stop`, `Open output folder`, прогресс текущего и общего выполнения
-  - **Log**: `QPlainTextEdit` со временем и сообщениями
+После обработки каждого видео создаётся папка `<VideoName>/` (или `<VideoName>_01`, `<VideoName>_02`, ...):
 
-## Тестовый сценарий (без UI)
+```text
+output_root/
+  MyVideo/
+    original.mp4
+    MyVideo_logo.mp4
+    frames/
+      frame_000001.jpg
+      ...
+    audio.m4a
+```
+
+Исходный файл переносится в `original.*` только после успешного завершения этапов.
+
+## Тестовый сценарий
 
 Положите входной файл в `samples/input.mp4`, затем:
 
@@ -59,23 +80,3 @@ python test_one.py
 ```bash
 python main.py --test-run
 ```
-
-Результаты будут в `samples/out/`, итог печатается в консоль.
-
-
-## Если приложение падает сразу после запуска в Windows (код 0xC0000409)
-
-- В `main.py` уже включен software OpenGL режим для Qt (`QT_OPENGL=software`),
-  это снижает риск падений из-за видеодрайвера.
-- Обновите/переустановите драйвер видеокарты и Microsoft Visual C++ Redistributable 2015-2022.
-- Проверьте, что версии пакетов согласованы:
-  ```bash
-  pip install --upgrade pip
-  pip install --upgrade PyQt6 PyQt6-Qt6 PyQt6-sip
-  ```
-- Для диагностики плагинов Qt можно запустить:
-  ```bash
-  set QT_DEBUG_PLUGINS=1
-  python main.py
-  ```
-

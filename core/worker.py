@@ -44,6 +44,7 @@ class ProcessingWorker(QObject):
         self.signals = WorkerSignals()
         self._stop_requested = False
         self._current_process: Optional[subprocess.Popen[str]] = None
+        self._last_ffmpeg_error: str = ""
 
         self._logger = logging.getLogger("video_splitter")
         self._logger.setLevel(logging.INFO)
@@ -364,6 +365,8 @@ class ProcessingWorker(QObject):
     ) -> None:
         ffmpeg_cmd = [command[0], "-progress", "pipe:1", "-nostats", *command[1:]]
         self._log(f"Running: {' '.join(ffmpeg_cmd)}")
+
+        ffmpeg_lines: list[str] = []
 
         self._current_process = subprocess.Popen(
             ffmpeg_cmd,

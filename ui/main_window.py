@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QSpinBox,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeView,
@@ -41,8 +42,9 @@ from core.ffmpeg import (
     is_logo_file,
     is_video_file,
 )
-from core.jobs import Job, ProcessingOptions
+from core.jobs import FrameReplaceJob, Job, ProcessingOptions
 from core.worker import ProcessingWorker
+from ui.tabs.frame_replace_tab import FrameReplaceTab
 
 
 class MainWindow(QMainWindow):
@@ -89,7 +91,6 @@ class MainWindow(QMainWindow):
         self.tree.setRootIndex(self.fs_model.index(QDir.homePath()))
         self.tree.doubleClicked.connect(self._on_tree_double_click)
         self.tree.setAlternatingRowColors(True)
-        self.tree.setContextMenuPolicy(self.tree.contextMenuPolicy())
         for col in (1, 2, 3):
             self.tree.hideColumn(col)
         layout.addWidget(QLabel("File manager"))
@@ -153,12 +154,30 @@ class MainWindow(QMainWindow):
         self.output_browse_btn = QPushButton("Browse...")
         output_row_layout.addWidget(self.output_folder_edit)
         output_row_layout.addWidget(self.output_browse_btn)
-
         self.save_next_checkbox = QCheckBox("Save next to input file")
-
         output_layout.addRow("Output folder", output_row)
         output_layout.addRow(self.save_next_checkbox)
         layout.addWidget(output_group)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_logo_tab(), "Замена эмблемы")
+        self.frame_replace_tab = FrameReplaceTab(self.add_frame_replace_job, self.selected_queue_video_path)
+        self.tabs.addTab(self.frame_replace_tab, "Замена кадра")
+        layout.addWidget(self.tabs)
+
+        self.log_edit = QPlainTextEdit()
+        self.log_edit.setReadOnly(True)
+        layout.addWidget(QLabel("Log"))
+        layout.addWidget(self.log_edit)
+
+        self.ffmpeg_browse_btn.clicked.connect(self.browse_ffmpeg)
+        self.output_browse_btn.clicked.connect(self.browse_output)
+        self.frame_replace_tab.start_btn.clicked.connect(self.start_processing)
+        return container
+
+    def _build_logo_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
 
         logo_group = QGroupBox("Замена эмблемы")
         logo_layout = QFormLayout(logo_group)
@@ -175,11 +194,9 @@ class MainWindow(QMainWindow):
         self.logo_coords_edit.setReadOnly(True)
         self.delogo_checkbox = QCheckBox("Удалять старую эмблему (delogo)")
         self.delogo_checkbox.setChecked(True)
-
         logo_layout.addRow("Logo file", logo_row)
         logo_layout.addRow("Coordinates", self.logo_coords_edit)
         logo_layout.addRow(self.delogo_checkbox)
-        layout.addWidget(logo_group)
 
         audio_group = QGroupBox("Audio extraction")
         audio_layout = QFormLayout(audio_group)
@@ -189,11 +206,9 @@ class MainWindow(QMainWindow):
         self.audio_format_combo.addItems(["m4a", "mp3", "wav"])
         self.audio_mode_combo = QComboBox()
         self.audio_mode_combo.addItems(["copy", "transcode"])
-
         audio_layout.addRow(self.extract_audio_checkbox)
         audio_layout.addRow("Format", self.audio_format_combo)
         audio_layout.addRow("Mode", self.audio_mode_combo)
-        layout.addWidget(audio_group)
 
         frame_group = QGroupBox("Frame extraction")
         frame_layout = QFormLayout(frame_group)
@@ -206,13 +221,10 @@ class MainWindow(QMainWindow):
         self.image_format_combo.addItems(["jpg", "png"])
         self.resize_combo = QComboBox()
         self.resize_combo.addItems(["original", "1280w", "1920w"])
-
         frame_layout.addRow(self.extract_frames_checkbox)
         frame_layout.addRow("Interval seconds", self.interval_spin)
         frame_layout.addRow("Image format", self.image_format_combo)
         frame_layout.addRow("Resize", self.resize_combo)
-        frame_layout.addRow(QLabel("Naming: frame_%06d.jpg / frame_%06d.png"))
-        layout.addWidget(frame_group)
 
         exec_group = QGroupBox("Execution")
         exec_layout = QVBoxLayout(exec_group)
@@ -233,21 +245,18 @@ class MainWindow(QMainWindow):
         exec_layout.addLayout(btn_row)
         exec_layout.addWidget(self.current_progress)
         exec_layout.addWidget(self.total_progress)
+
+        layout.addWidget(logo_group)
+        layout.addWidget(audio_group)
+        layout.addWidget(frame_group)
         layout.addWidget(exec_group)
+        layout.addStretch(1)
 
-        self.log_edit = QPlainTextEdit()
-        self.log_edit.setReadOnly(True)
-        layout.addWidget(QLabel("Log"))
-        layout.addWidget(self.log_edit)
-
-        self.ffmpeg_browse_btn.clicked.connect(self.browse_ffmpeg)
-        self.output_browse_btn.clicked.connect(self.browse_output)
         self.logo_browse_btn.clicked.connect(self.browse_logo)
         self.start_btn.clicked.connect(self.start_processing)
         self.stop_btn.clicked.connect(self.stop_processing)
         self.open_output_btn.clicked.connect(self.open_output_folder)
-
-        return container
+        return tab
 
     def _load_settings(self) -> None:
         ffmpeg_path = self.settings.value("ffmpeg_path", detect_ffmpeg() or "ffmpeg")
@@ -271,7 +280,7 @@ class MainWindow(QMainWindow):
     def _on_tree_double_click(self, index) -> None:
         path = Path(self.fs_model.filePath(index))
         if path.is_file() and is_video_file(path):
-            self._add_job(str(path))
+            self._add_job(Job(input_path=str(path)))
 
     def add_selected_from_tree(self) -> None:
         index = self.tree.currentIndex()
@@ -279,7 +288,7 @@ class MainWindow(QMainWindow):
             return
         path = Path(self.fs_model.filePath(index))
         if path.is_file() and is_video_file(path):
-            self._add_job(str(path))
+            self._add_job(Job(input_path=str(path)))
 
     def set_logo_from_tree(self) -> None:
         index = self.tree.currentIndex()
@@ -292,14 +301,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid logo", "Select PNG or WEBP file for logo")
 
     def add_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select videos",
-            "",
-            "Video files (*.mp4 *.mov *.mkv *.avi)",
-        )
+        files, _ = QFileDialog.getOpenFileNames(self, "Select videos", "", "Video files (*.mp4 *.mov *.mkv *.avi)")
         for file_path in files:
-            self._add_job(file_path)
+            self._add_job(Job(input_path=file_path))
 
     def add_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select folder")
@@ -307,20 +311,29 @@ class MainWindow(QMainWindow):
             return
         for child in sorted(Path(folder).iterdir()):
             if child.is_file() and child.suffix.lower() in VIDEO_EXTENSIONS:
-                self._add_job(str(child))
+                self._add_job(Job(input_path=str(child)))
 
-    def _add_job(self, input_path: str) -> None:
-        if any(Path(job.input_path) == Path(input_path) for job in self.jobs):
+    def add_frame_replace_job(self, job: FrameReplaceJob) -> None:
+        self._add_job(job)
+
+    def _add_job(self, job: Job) -> None:
+        if any(Path(existing.input_path) == Path(job.input_path) and type(existing) is type(job) for existing in self.jobs):
             return
-        job = Job(input_path=input_path)
         self.jobs.append(job)
         row = self.queue_table.rowCount()
         self.queue_table.insertRow(row)
-        self.queue_table.setItem(row, 0, QTableWidgetItem(job.filename))
+        title = f"[FrameReplace] {job.filename}" if isinstance(job, FrameReplaceJob) else job.filename
+        self.queue_table.setItem(row, 0, QTableWidgetItem(title))
         self.queue_table.setItem(row, 1, QTableWidgetItem(job.status.value))
         self.queue_table.setItem(row, 2, QTableWidgetItem("0"))
         self.queue_table.setItem(row, 3, QTableWidgetItem(""))
-        self.total_progress.setMaximum(len(self.jobs))
+        self.total_progress.setMaximum(max(1, len(self.jobs)))
+
+    def selected_queue_video_path(self) -> str:
+        rows = sorted({idx.row() for idx in self.queue_table.selectedIndexes()})
+        if not rows:
+            return ""
+        return self.jobs[rows[0]].input_path
 
     def remove_selected(self) -> None:
         rows = sorted({idx.row() for idx in self.queue_table.selectedIndexes()}, reverse=True)
@@ -380,7 +393,7 @@ class MainWindow(QMainWindow):
             return
 
         options = self._collect_options()
-        if not options.logo_path:
+        if any(not isinstance(job, FrameReplaceJob) for job in self.jobs) and not options.logo_path:
             QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
             return
 
@@ -401,6 +414,7 @@ class MainWindow(QMainWindow):
         self._thread.finished.connect(self._thread.deleteLater)
 
         self.start_btn.setEnabled(False)
+        self.frame_replace_tab.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self._thread.start()
 
@@ -424,8 +438,18 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, summary: dict) -> None:
         self.start_btn.setEnabled(True)
+        self.frame_replace_tab.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         message = f"Done: {summary['ok']}\nErrors: {summary['error']}\nCancelled: {summary['cancelled']}"
+
+        error_jobs = [job for job in self.jobs if job.status.value == "Error" and job.error_message]
+        if error_jobs:
+            self._append_log("Ошибки по задачам:")
+            for job in error_jobs:
+                self._append_log(f"- {job.filename}: {job.error_message}")
+            first_error = error_jobs[0]
+            message += f"\n\nПервый текст ошибки:\n{first_error.filename}: {first_error.error_message.splitlines()[0]}"
+
         self._append_log(message)
         QMessageBox.information(self, "Processing finished", message)
 

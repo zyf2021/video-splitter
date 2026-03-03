@@ -48,3 +48,14 @@ class Job:
     @property
     def filename(self) -> str:
         return Path(self.input_path).name
+
+
+@dataclass
+class FrameReplaceJob(Job):
+    replacement_image: str = ""
+    start_time: str = ""
+    end_time: str = ""
+    keep_audio: bool = True
+    also_extract_audio: bool = False
+    also_extract_frames: bool = False
+    frame_interval_sec: int = 10

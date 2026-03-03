@@ -10,6 +10,7 @@ from core.jobs import ProcessingOptions
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
 LOGO_EXTENSIONS = {".png", ".webp"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 LOGO_LEFT = 1100
 LOGO_TOP = 660
@@ -27,6 +28,10 @@ def is_video_file(path: Path) -> bool:
 
 def is_logo_file(path: Path) -> bool:
     return path.suffix.lower() in LOGO_EXTENSIONS
+
+
+def is_image_file(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
 def detect_ffmpeg() -> Optional[str]:
@@ -70,6 +75,36 @@ def probe_duration(ffprobe_path: str, input_path: str) -> float:
         return float(result.stdout.strip())
     except ValueError as exc:
         raise FFmpegError("Could not parse duration from ffprobe output") from exc
+
+
+def probe_video_size(ffprobe_path: str, input_path: str) -> tuple[int, int]:
+    cmd = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0:s=x",
+        input_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise FFmpegError(result.stderr.strip() or "ffprobe size probe failed")
+
+    raw = result.stdout.strip()
+    try:
+        width_text, height_text = raw.split("x", 1)
+        width = int(width_text)
+        height = int(height_text)
+    except Exception as exc:  # noqa: BLE001
+        raise FFmpegError("Could not parse width/height from ffprobe output") from exc
+
+    if width <= 0 or height <= 0:
+        raise FFmpegError("Invalid video dimensions from ffprobe")
+    return width, height
 
 
 def has_audio_stream(ffprobe_path: str, input_path: str) -> bool:
@@ -199,6 +234,57 @@ def build_delogo_overlay_command(
     ]
 
 
+def build_frame_replace_command(
+    options: ProcessingOptions,
+    input_path: str,
+    image_path: str,
+    output_file: str,
+    start_seconds: float,
+    end_seconds: float,
+    video_width: int,
+    video_height: int,
+    keep_audio: bool,
+) -> list[str]:
+    overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    filter_complex = (
+        f"[1:v]scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
+        f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2[img];"
+        f"[0:v][img]overlay=0:0:enable=between(t\\,{start_seconds:.3f}\\,{end_seconds:.3f})[v]"
+    )
+
+    command = [
+        options.ffmpeg_path,
+        overwrite_flag,
+        "-i",
+        input_path,
+        "-loop",
+        "1",
+        "-i",
+        image_path,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "medium",
+        "-shortest",
+    ]
+
+    if keep_audio:
+        command += ["-c:a", "copy"]
+    else:
+        command += ["-an"]
+
+    command.append(output_file)
+    return command
+
+
 def build_audio_command(
     options: ProcessingOptions,
     input_path: str,
@@ -230,9 +316,11 @@ def build_frames_command(
     options: ProcessingOptions,
     input_path: str,
     output_pattern: str,
+    frame_interval_sec: int | None = None,
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
-    fps_filter = f"fps=1/{options.frame_interval_sec}"
+    interval = frame_interval_sec or options.frame_interval_sec
+    fps_filter = f"fps=1/{interval}"
 
     if options.resize_mode == "1280w":
         vf = f"{fps_filter},scale=1280:-1"

@@ -25,8 +25,19 @@ from core.ffmpeg import (
     resolve_output_root,
     validate_binaries,
 )
-from core.jobs import FrameReplaceJob, Job, JobStatus, ProcessingOptions
+from core.jobs import FrameReplaceJob, Job, JobStatus, ProcessingOptions, SlideVideoJob
 from core.timecode import TimecodeError, parse_timecode_to_seconds
+from core.slide_video.builder import (
+    build_audio_concat_command,
+    build_audio_scene_command,
+    build_mux_command,
+    build_scene_clip_command,
+    build_video_concat_command,
+    scene_duration,
+    write_concat_list,
+)
+from core.slide_video.models import Project, ProjectSettings, Scene
+from core.slide_video.project_io import save_project
 
 
 class WorkerSignals(QObject):
@@ -83,6 +94,8 @@ class ProcessingWorker(QObject):
             try:
                 if isinstance(job, FrameReplaceJob):
                     self._process_frame_replace_job(idx, job)
+                elif isinstance(job, SlideVideoJob):
+                    self._process_slide_video_job(idx, job)
                 else:
                     self._process_logo_job(idx, job)
 
@@ -118,7 +131,7 @@ class ProcessingWorker(QObject):
         self.signals.finished.emit({"ok": done_count, "error": error_count, "cancelled": cancelled_count})
 
     def _has_logo_jobs(self) -> bool:
-        return any(not isinstance(job, FrameReplaceJob) for job in self.jobs)
+        return any(not isinstance(job, (FrameReplaceJob, SlideVideoJob)) for job in self.jobs)
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -286,6 +299,113 @@ class ProcessingWorker(QObject):
         job.outputs.append(str(original_output))
         self._log(f"[{job.filename}] Output: {job_dir}")
         self._finalize_job(index, job, job_dir, no_audio=no_audio and job.also_extract_audio)
+
+
+    def _process_slide_video_job(self, index: int, job: SlideVideoJob) -> None:
+        self._prepare_job(index, job)
+        if not job.scenes:
+            raise FFmpegError("Slide-video project has no scenes")
+
+        settings = ProjectSettings(
+            output_root=job.output_root,
+            output_name=job.output_name,
+            resolution_preset=job.resolution_preset,
+            fps=job.fps,
+            timing_mode=job.timing_mode,
+            scale_mode=job.scale_mode,
+            transitions=job.transitions,
+            keep_temp=job.keep_temp,
+            keep_scene_clips=job.keep_scene_clips,
+        )
+        scenes = [
+            Scene(
+                slide_path=s.slide_path,
+                audio_path=s.audio_path,
+                duration=s.duration,
+                start=s.start,
+                end=s.end,
+                motion=s.motion,
+                notes=s.notes,
+            )
+            for s in job.scenes
+        ]
+        project = Project(settings=settings, scenes=scenes)
+        width, height = project.settings.resolution
+
+        output_root = Path(job.output_root) if job.output_root else Path(job.input_path).parent
+        project_dir = make_unique_dir(output_root / project.display_name)
+        ensure_output_dir(project_dir)
+        temp_dir = project_dir / "temp"
+        scenes_dir = project_dir / "scenes"
+        audio_tmp_dir = temp_dir / "audio"
+        ensure_output_dir(temp_dir)
+        ensure_output_dir(audio_tmp_dir)
+        if job.keep_scene_clips:
+            ensure_output_dir(scenes_dir)
+
+        self._log(f"[{job.output_name}] Step 1/7: validate table + assets")
+        for i, scene in enumerate(project.scenes, start=1):
+            if not Path(scene.slide_path).exists():
+                raise FFmpegError(f"Scene {i}: slide not found")
+            duration = scene_duration(project, scene)
+            if duration <= 0:
+                raise FFmpegError(f"Scene {i}: invalid duration")
+
+        self._log(f"[{job.output_name}] Step 2/7: ensure ffmpeg available")
+
+        video_clips: list[Path] = []
+        audio_clips: list[Path] = []
+        total_scenes = len(project.scenes)
+
+        self._log(f"[{job.output_name}] Step 3/7: render scene clips")
+        for idx_scene, scene in enumerate(project.scenes):
+            duration = scene_duration(project, scene)
+            clip_output = temp_dir / f"scene_{idx_scene+1:03d}.mp4"
+            scene_cmd = build_scene_clip_command(
+                self.options.ffmpeg_path,
+                scene,
+                str(clip_output),
+                width,
+                height,
+                project.settings.fps,
+                duration,
+                project.settings.scale_mode,
+                overwrite=True,
+            )
+            self._run_ffmpeg(scene_cmd, duration, index, job, 0.05, 0.45 / total_scenes)
+            video_clips.append(clip_output)
+            if job.keep_scene_clips:
+                shutil.copy2(clip_output, scenes_dir / clip_output.name)
+
+            audio_output = audio_tmp_dir / f"audio_{idx_scene+1:03d}.m4a"
+            audio_cmd = build_audio_scene_command(self.options.ffmpeg_path, scene, str(audio_output), duration, overwrite=True)
+            self._run_ffmpeg(audio_cmd, duration, index, job, 0.5, 0.25 / total_scenes)
+            audio_clips.append(audio_output)
+
+        self._log(f"[{job.output_name}] Step 4/7: concat video")
+        video_list = temp_dir / "video_concat.txt"
+        write_concat_list(video_clips, video_list)
+        video_mix = temp_dir / "video_mix.mp4"
+        self._run_ffmpeg(build_video_concat_command(self.options.ffmpeg_path, str(video_list), str(video_mix), True), project.total_duration, index, job, 0.75, 0.08)
+
+        self._log(f"[{job.output_name}] Step 5/7: build audio track")
+        audio_list = temp_dir / "audio_concat.txt"
+        write_concat_list(audio_clips, audio_list)
+        audio_mix = project_dir / "audio_mix.m4a"
+        self._run_ffmpeg(build_audio_concat_command(self.options.ffmpeg_path, str(audio_list), str(audio_mix), True), project.total_duration, index, job, 0.83, 0.07)
+
+        self._log(f"[{job.output_name}] Step 6/7: mux final video")
+        final_output = project_dir / "final.mp4"
+        self._run_ffmpeg(build_mux_command(self.options.ffmpeg_path, str(video_mix), str(audio_mix), str(final_output), True), project.total_duration, index, job, 0.9, 0.09)
+
+        self._log(f"[{job.output_name}] Step 7/7: cleanup temp")
+        if not project.settings.keep_temp and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        save_project(project, str(project_dir / "project.json"))
+        job.outputs.extend([str(final_output), str(audio_mix), str(project_dir / "project.json")])
+        job.output_path = str(project_dir)
+        self._finalize_job(index, job, project_dir, no_audio=False)
 
     def _finalize_job(self, index: int, job: Job, job_dir: Path, no_audio: bool) -> None:
         job.output_path = str(job_dir)

@@ -42,9 +42,10 @@ from core.ffmpeg import (
     is_logo_file,
     is_video_file,
 )
-from core.jobs import FrameReplaceJob, Job, ProcessingOptions
+from core.jobs import FrameReplaceJob, Job, ProcessingOptions, SlideVideoJob
 from core.worker import ProcessingWorker
 from ui.tabs.frame_replace_tab import FrameReplaceTab
+from ui.tabs.slide_video_tab import SlideVideoTab
 
 
 class MainWindow(QMainWindow):
@@ -167,7 +168,13 @@ class MainWindow(QMainWindow):
             self._collect_options,
             self._append_log,
         )
+        self.slide_video_tab = SlideVideoTab(
+            self.add_slide_video_job,
+            self._collect_options,
+            self._append_log,
+        )
         self.tabs.addTab(self.frame_replace_tab, "Замена кадра")
+        self.tabs.addTab(self.slide_video_tab, "Слайд-видео")
         layout.addWidget(self.tabs)
 
         self.log_edit = QPlainTextEdit()
@@ -321,13 +328,22 @@ class MainWindow(QMainWindow):
     def add_frame_replace_job(self, job: FrameReplaceJob) -> None:
         self._add_job(job)
 
+    def add_slide_video_job(self, job: SlideVideoJob) -> None:
+        self._add_job(job)
+
     def _add_job(self, job: Job) -> None:
-        if any(Path(existing.input_path) == Path(job.input_path) and type(existing) is type(job) for existing in self.jobs):
-            return
+        if not isinstance(job, SlideVideoJob):
+            if any(Path(existing.input_path) == Path(job.input_path) and type(existing) is type(job) for existing in self.jobs):
+                return
         self.jobs.append(job)
         row = self.queue_table.rowCount()
         self.queue_table.insertRow(row)
-        title = f"[FrameReplace] {job.filename}" if isinstance(job, FrameReplaceJob) else job.filename
+        if isinstance(job, FrameReplaceJob):
+            title = f"[FrameReplace] {job.filename}"
+        elif isinstance(job, SlideVideoJob):
+            title = f"[SlideVideo] {job.output_name}"
+        else:
+            title = job.filename
         self.queue_table.setItem(row, 0, QTableWidgetItem(title))
         self.queue_table.setItem(row, 1, QTableWidgetItem(job.status.value))
         self.queue_table.setItem(row, 2, QTableWidgetItem("0"))
@@ -398,7 +414,7 @@ class MainWindow(QMainWindow):
             return
 
         options = self._collect_options()
-        if any(not isinstance(job, FrameReplaceJob) for job in self.jobs) and not options.logo_path:
+        if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob)) for job in self.jobs) and not options.logo_path:
             QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
             return
 

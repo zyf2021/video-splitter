@@ -66,3 +66,28 @@ class FrameReplaceJob(Job):
     also_extract_audio: bool = False
     also_extract_frames: bool = False
     frame_interval_sec: int = 10
+
+
+@dataclass
+class SlideSceneSpec:
+    slide_path: str
+    audio_path: str = ""
+    duration: float = 3.0
+    start: float = 0.0
+    end: float = 3.0
+    motion: str = "Static (no motion)"
+    notes: str = ""
+
+
+@dataclass
+class SlideVideoJob(Job):
+    output_root: str = ""
+    output_name: str = "slide_video"
+    resolution_preset: str = "1920x1080 (16:9)"
+    fps: int = 30
+    timing_mode: str = "duration"  # duration|timecodes
+    scale_mode: str = "fill"  # fill|fit
+    transitions: bool = False
+    keep_temp: bool = False
+    keep_scene_clips: bool = False
+    scenes: list[SlideSceneSpec] = field(default_factory=list)

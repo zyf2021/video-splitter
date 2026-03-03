@@ -250,19 +250,25 @@ def build_frame_replace_command(
     roi_y: int = 0,
     roi_w: int = 0,
     roi_h: int = 0,
+    expression_style: str = "escaped",
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    if expression_style == "quoted":
+        enable_expr = f"'between(t,{start_seconds:.3f},{end_seconds:.3f})'"
+    else:
+        enable_expr = f"between(t\,{start_seconds:.3f}\,{end_seconds:.3f})"
+
     if mode == "roi":
         filter_complex = (
             f"[1:v]scale={roi_w}:{roi_h}:force_original_aspect_ratio=decrease,"
             f"pad={roi_w}:{roi_h}:(ow-iw)/2:(oh-ih)/2[img];"
-            f"[0:v][img]overlay={roi_x}:{roi_y}:enable='between(t,{start_seconds:.3f},{end_seconds:.3f})'[v]"
+            f"[0:v][img]overlay={roi_x}:{roi_y}:enable={enable_expr}[v]"
         )
     else:
         filter_complex = (
             f"[1:v]scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
             f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2[img];"
-            f"[0:v][img]overlay=0:0:enable='between(t,{start_seconds:.3f},{end_seconds:.3f})'[v]"
+            f"[0:v][img]overlay=0:0:enable={enable_expr}[v]"
         )
 
     command = [

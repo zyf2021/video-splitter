@@ -222,23 +222,43 @@ class ProcessingWorker(QObject):
         frames_dir = job_dir / "frames"
         original_output = job_dir / f"original{input_path.suffix}"
 
-        cmd = build_frame_replace_command(
-            self.options,
-            job.input_path,
-            job.replacement_image,
-            str(processed_video),
-            start_seconds,
-            end_seconds,
-            video_width,
-            video_height,
-            keep_audio=job.keep_audio,
-            mode=job.mode,
-            roi_x=job.roi_x,
-            roi_y=job.roi_y,
-            roi_w=job.roi_w,
-            roi_h=job.roi_h,
-        )
-        self._run_ffmpeg(cmd, duration, index, job, 0.0, 0.7)
+        attempts = [
+            {"keep_audio": job.keep_audio, "expression_style": "escaped", "tag": "primary"},
+        ]
+        if job.keep_audio:
+            attempts.append({"keep_audio": False, "expression_style": "escaped", "tag": "aac-fallback"})
+        attempts.append({"keep_audio": False, "expression_style": "quoted", "tag": "quoted-expr-fallback"})
+
+        last_error: FFmpegError | None = None
+        for attempt in attempts:
+            cmd = build_frame_replace_command(
+                self.options,
+                job.input_path,
+                job.replacement_image,
+                str(processed_video),
+                start_seconds,
+                end_seconds,
+                video_width,
+                video_height,
+                keep_audio=attempt["keep_audio"],
+                mode=job.mode,
+                roi_x=job.roi_x,
+                roi_y=job.roi_y,
+                roi_w=job.roi_w,
+                roi_h=job.roi_h,
+                expression_style=attempt["expression_style"],
+            )
+            try:
+                self._run_ffmpeg(cmd, duration, index, job, 0.0, 0.7)
+                last_error = None
+                break
+            except FFmpegError as exc:
+                last_error = exc
+                self._log(f"[{job.filename}] Frame replace attempt '{attempt['tag']}' failed: {exc}")
+
+        if last_error is not None:
+            raise last_error
+
         job.outputs.append(str(processed_video))
 
         no_audio = False
@@ -358,6 +378,7 @@ class ProcessingWorker(QObject):
             bufsize=1,
         )
 
+        recent_output: list[str] = []
         assert self._current_process.stdout is not None
         for raw_line in self._current_process.stdout:
             if self._stop_requested:
@@ -366,8 +387,10 @@ class ProcessingWorker(QObject):
             line = raw_line.strip()
             if not line:
                 continue
-            ffmpeg_lines.append(line)
-            self._logger.info(f"ffmpeg: {line}")
+            recent_output.append(line)
+            if len(recent_output) > 30:
+                recent_output.pop(0)
+
             if line.startswith("out_time_ms="):
                 out_time_ms = self._parse_out_time_ms(line.split("=", 1)[1])
                 if out_time_ms is not None:
@@ -386,8 +409,7 @@ class ProcessingWorker(QObject):
         if self._stop_requested:
             raise FFmpegError("Cancelled")
         if return_code != 0:
-            tail = "\n".join(ffmpeg_lines[-20:]) if ffmpeg_lines else "No ffmpeg output captured"
-            self._last_ffmpeg_error = tail
+            tail = "\n".join(recent_output[-10:])
             raise FFmpegError(f"ffmpeg failed with code {return_code}. Last output:\n{tail}")
 
     def _update_progress(

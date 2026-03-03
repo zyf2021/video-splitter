@@ -161,7 +161,12 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_logo_tab(), "Замена эмблемы")
-        self.frame_replace_tab = FrameReplaceTab(self.add_frame_replace_job, self.selected_queue_video_path)
+        self.frame_replace_tab = FrameReplaceTab(
+            self.add_frame_replace_job,
+            self.selected_queue_video_path,
+            self._collect_options,
+            self._append_log,
+        )
         self.tabs.addTab(self.frame_replace_tab, "Замена кадра")
         layout.addWidget(self.tabs)
 

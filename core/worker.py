@@ -189,6 +189,23 @@ class ProcessingWorker(QObject):
 
         duration = probe_duration(self.options.ffprobe_path, job.input_path)
         video_width, video_height = probe_video_size(self.options.ffprobe_path, job.input_path)
+        job.start_s = start_seconds
+
+        if job.mode == "roi":
+            if job.roi_w <= 0 or job.roi_h <= 0 or job.roi_x < 0 or job.roi_y < 0:
+                raise FFmpegError("ROI must satisfy x>=0, y>=0, w>0, h>0")
+            if job.roi_x + job.roi_w > video_width or job.roi_y + job.roi_h > video_height:
+                error = (
+                    "ROI выходит за границы видео. "
+                    f"Видео: {video_width}×{video_height}, "
+                    f"ROI: x={job.roi_x}, y={job.roi_y}, w={job.roi_w}, h={job.roi_h}"
+                )
+                self._log(f"[{job.filename}] {error}")
+                job.status = JobStatus.SKIPPED
+                job.error_message = error
+                job.progress = 0
+                self.signals.job_updated.emit(index, job)
+                return
 
         self._log(f"[{job.filename}] Frame replace start={job.start_time} end={job.end_time}")
         self._log(f"[{job.filename}] Seconds start={start_seconds:.3f} end={end_seconds:.3f}")
@@ -214,6 +231,11 @@ class ProcessingWorker(QObject):
             video_width,
             video_height,
             keep_audio=job.keep_audio,
+            mode=job.mode,
+            roi_x=job.roi_x,
+            roi_y=job.roi_y,
+            roi_w=job.roi_w,
+            roi_h=job.roi_h,
         )
         self._run_ffmpeg(cmd, duration, index, job, 0.0, 0.7)
         job.outputs.append(str(processed_video))

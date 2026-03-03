@@ -13,6 +13,7 @@ from core.ffmpeg import (
     FFmpegError,
     build_audio_command,
     build_delogo_overlay_command,
+    build_frame_replace_command,
     build_frames_command,
     build_overlay_command,
     ensure_output_dir,
@@ -20,10 +21,12 @@ from core.ffmpeg import (
     is_logo_file,
     make_unique_dir,
     probe_duration,
+    probe_video_size,
     resolve_output_root,
     validate_binaries,
 )
-from core.jobs import Job, JobStatus, ProcessingOptions
+from core.jobs import FrameReplaceJob, Job, JobStatus, ProcessingOptions
+from core.timecode import TimecodeError, parse_timecode_to_seconds
 
 
 class WorkerSignals(QObject):
@@ -58,11 +61,12 @@ class ProcessingWorker(QObject):
             self.signals.finished.emit({"ok": 0, "error": len(self.jobs), "cancelled": 0})
             return
 
-        logo_path = Path(self.options.logo_path)
-        if not logo_path.exists() or not is_logo_file(logo_path):
-            self._log("Logo file is not selected or has unsupported format (PNG/WEBP)")
-            self.signals.finished.emit({"ok": 0, "error": len(self.jobs), "cancelled": 0})
-            return
+        if self._has_logo_jobs():
+            logo_path = Path(self.options.logo_path)
+            if not logo_path.exists() or not is_logo_file(logo_path):
+                self._log("Logo file is not selected or has unsupported format (PNG/WEBP)")
+                self.signals.finished.emit({"ok": 0, "error": len(self.jobs), "cancelled": 0})
+                return
 
         done_count = 0
         error_count = 0
@@ -76,7 +80,11 @@ class ProcessingWorker(QObject):
                 continue
 
             try:
-                self._process_job(idx, job)
+                if isinstance(job, FrameReplaceJob):
+                    self._process_frame_replace_job(idx, job)
+                else:
+                    self._process_logo_job(idx, job)
+
                 if job.status in (JobStatus.DONE, JobStatus.DONE_NO_AUDIO):
                     done_count += 1
                 elif job.status == JobStatus.CANCELLED:
@@ -108,17 +116,23 @@ class ProcessingWorker(QObject):
 
         self.signals.finished.emit({"ok": done_count, "error": error_count, "cancelled": cancelled_count})
 
+    def _has_logo_jobs(self) -> bool:
+        return any(not isinstance(job, FrameReplaceJob) for job in self.jobs)
+
     def request_stop(self) -> None:
         self._stop_requested = True
         if self._current_process and self._current_process.poll() is None:
             self._current_process.terminate()
 
-    def _process_job(self, index: int, job: Job) -> None:
+    def _prepare_job(self, index: int, job: Job) -> None:
         job.status = JobStatus.PROCESSING
         job.progress = 0
         job.outputs = []
         self.signals.job_updated.emit(index, job)
         self._log(f"[{job.filename}] Processing started")
+
+    def _process_logo_job(self, index: int, job: Job) -> None:
+        self._prepare_job(index, job)
 
         duration = probe_duration(self.options.ffprobe_path, job.input_path)
         input_path = Path(job.input_path)
@@ -145,22 +159,7 @@ class ProcessingWorker(QObject):
                 no_audio = True
                 self._log(f"[{job.filename}] No audio stream found, skipping audio extraction")
             else:
-                try:
-                    cmd = build_audio_command(self.options, str(processed_video), str(audio_output))
-                    self._run_ffmpeg(cmd, duration, index, job, 0.5, 0.2)
-                except FFmpegError as exc:
-                    if self.options.audio_mode == "copy" and self.options.audio_format == "m4a":
-                        self._log(f"[{job.filename}] Copy mode failed, fallback to transcode: {exc}")
-                        fallback_cmd = build_audio_command(
-                            self.options,
-                            str(processed_video),
-                            str(audio_output),
-                            force_transcode=True,
-                        )
-                        self._run_ffmpeg(fallback_cmd, duration, index, job, 0.5, 0.2)
-                    else:
-                        raise
-                job.outputs.append(str(audio_output))
+                self._extract_audio(index, job, duration, processed_video, audio_output, 0.5, 0.2)
 
         if self.options.extract_frames:
             self._log(f"[{job.filename}] Step 3/4: extracting frames")
@@ -173,15 +172,111 @@ class ProcessingWorker(QObject):
         self._log(f"[{job.filename}] Step 4/4: finalizing output structure")
         shutil.move(str(input_path), str(original_output))
         job.outputs.append(str(original_output))
-        job.output_path = str(job_dir)
+        self._finalize_job(index, job, job_dir, no_audio=no_audio and self.options.extract_audio)
 
+    def _process_frame_replace_job(self, index: int, job: FrameReplaceJob) -> None:
+        self._prepare_job(index, job)
+        input_path = Path(job.input_path)
+
+        try:
+            start_seconds = parse_timecode_to_seconds(job.start_time)
+            end_seconds = parse_timecode_to_seconds(job.end_time)
+        except TimecodeError as exc:
+            raise FFmpegError(str(exc)) from exc
+
+        if start_seconds >= end_seconds:
+            raise FFmpegError("start_time must be less than end_time")
+
+        duration = probe_duration(self.options.ffprobe_path, job.input_path)
+        video_width, video_height = probe_video_size(self.options.ffprobe_path, job.input_path)
+
+        self._log(f"[{job.filename}] Frame replace start={job.start_time} end={job.end_time}")
+        self._log(f"[{job.filename}] Seconds start={start_seconds:.3f} end={end_seconds:.3f}")
+        self._log(f"[{job.filename}] Video size {video_width}x{video_height}")
+
+        output_root = resolve_output_root(job.input_path, self.options)
+        ensure_output_dir(output_root)
+        job_dir = make_unique_dir(output_root / input_path.stem)
+        ensure_output_dir(job_dir)
+
+        processed_video = job_dir / f"{input_path.stem}_frame_replace.mp4"
+        audio_output = job_dir / f"audio.{self.options.audio_format}"
+        frames_dir = job_dir / "frames"
+        original_output = job_dir / f"original{input_path.suffix}"
+
+        cmd = build_frame_replace_command(
+            self.options,
+            job.input_path,
+            job.replacement_image,
+            str(processed_video),
+            start_seconds,
+            end_seconds,
+            video_width,
+            video_height,
+            keep_audio=job.keep_audio,
+        )
+        self._run_ffmpeg(cmd, duration, index, job, 0.0, 0.7)
+        job.outputs.append(str(processed_video))
+
+        no_audio = False
+        if job.also_extract_audio:
+            has_audio = has_audio_stream(self.options.ffprobe_path, str(processed_video))
+            if not has_audio:
+                no_audio = True
+                self._log(f"[{job.filename}] No audio stream found, skipping audio extraction")
+            else:
+                self._extract_audio(index, job, duration, processed_video, audio_output, 0.7, 0.15)
+
+        if job.also_extract_frames:
+            ensure_output_dir(frames_dir)
+            pattern = frames_dir / f"frame_%06d.{self.options.frame_format}"
+            cmd_frames = build_frames_command(
+                self.options,
+                str(processed_video),
+                str(pattern),
+                frame_interval_sec=job.frame_interval_sec,
+            )
+            self._run_ffmpeg(cmd_frames, duration, index, job, 0.85, 0.1)
+            job.outputs.append(str(frames_dir))
+
+        shutil.move(str(input_path), str(original_output))
+        job.outputs.append(str(original_output))
+        self._log(f"[{job.filename}] Output: {job_dir}")
+        self._finalize_job(index, job, job_dir, no_audio=no_audio and job.also_extract_audio)
+
+    def _finalize_job(self, index: int, job: Job, job_dir: Path, no_audio: bool) -> None:
+        job.output_path = str(job_dir)
         job.progress = 100
-        if no_audio and self.options.extract_audio:
-            job.status = JobStatus.DONE_NO_AUDIO
-        else:
-            job.status = JobStatus.DONE
+        job.status = JobStatus.DONE_NO_AUDIO if no_audio else JobStatus.DONE
         self.signals.job_updated.emit(index, job)
         self._log(f"[{job.filename}] Processing finished")
+
+    def _extract_audio(
+        self,
+        index: int,
+        job: Job,
+        duration: float,
+        processed_video: Path,
+        audio_output: Path,
+        offset: float,
+        weight: float,
+    ) -> None:
+        try:
+            cmd = build_audio_command(self.options, str(processed_video), str(audio_output))
+            self._run_ffmpeg(cmd, duration, index, job, offset, weight)
+        except FFmpegError as exc:
+            if self.options.audio_mode == "copy" and self.options.audio_format == "m4a":
+                self._log(f"[{job.filename}] Copy mode failed, fallback to transcode: {exc}")
+                fallback_cmd = build_audio_command(
+                    self.options,
+                    str(processed_video),
+                    str(audio_output),
+                    force_transcode=True,
+                )
+                self._run_ffmpeg(fallback_cmd, duration, index, job, offset, weight)
+            else:
+                raise
+        job.outputs.append(str(audio_output))
 
     def _run_overlay_step(
         self,

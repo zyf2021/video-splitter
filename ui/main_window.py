@@ -441,6 +441,15 @@ class MainWindow(QMainWindow):
         self.frame_replace_tab.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         message = f"Done: {summary['ok']}\nErrors: {summary['error']}\nCancelled: {summary['cancelled']}"
+
+        error_jobs = [job for job in self.jobs if job.status.value == "Error" and job.error_message]
+        if error_jobs:
+            self._append_log("Ошибки по задачам:")
+            for job in error_jobs:
+                self._append_log(f"- {job.filename}: {job.error_message}")
+            first_error = error_jobs[0]
+            message += f"\n\nПервый текст ошибки:\n{first_error.filename}: {first_error.error_message.splitlines()[0]}"
+
         self._append_log(message)
         QMessageBox.information(self, "Processing finished", message)
 

@@ -44,6 +44,7 @@ class ProcessingWorker(QObject):
         self.signals = WorkerSignals()
         self._stop_requested = False
         self._current_process: Optional[subprocess.Popen[str]] = None
+        self._last_ffmpeg_error: str = ""
 
         self._logger = logging.getLogger("video_splitter")
         self._logger.setLevel(logging.INFO)
@@ -323,6 +324,8 @@ class ProcessingWorker(QObject):
         ffmpeg_cmd = [command[0], "-progress", "pipe:1", "-nostats", *command[1:]]
         self._log(f"Running: {' '.join(ffmpeg_cmd)}")
 
+        ffmpeg_lines: list[str] = []
+
         self._current_process = subprocess.Popen(
             ffmpeg_cmd,
             stdout=subprocess.PIPE,
@@ -341,6 +344,8 @@ class ProcessingWorker(QObject):
             line = raw_line.strip()
             if not line:
                 continue
+            ffmpeg_lines.append(line)
+            self._logger.info(f"ffmpeg: {line}")
             if line.startswith("out_time_ms="):
                 out_time_ms = self._parse_out_time_ms(line.split("=", 1)[1])
                 if out_time_ms is not None:
@@ -359,7 +364,9 @@ class ProcessingWorker(QObject):
         if self._stop_requested:
             raise FFmpegError("Cancelled")
         if return_code != 0:
-            raise FFmpegError(f"ffmpeg failed with code {return_code}")
+            tail = "\n".join(ffmpeg_lines[-20:]) if ffmpeg_lines else "No ffmpeg output captured"
+            self._last_ffmpeg_error = tail
+            raise FFmpegError(f"ffmpeg failed with code {return_code}. Last output:\n{tail}")
 
     def _update_progress(
         self,

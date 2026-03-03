@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -87,18 +88,18 @@ def probe_video_size(ffprobe_path: str, input_path: str) -> tuple[int, int]:
         "-show_entries",
         "stream=width,height",
         "-of",
-        "csv=p=0:s=x",
+        "json",
         input_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise FFmpegError(result.stderr.strip() or "ffprobe size probe failed")
 
-    raw = result.stdout.strip()
     try:
-        width_text, height_text = raw.split("x", 1)
-        width = int(width_text)
-        height = int(height_text)
+        payload = json.loads(result.stdout)
+        stream = payload["streams"][0]
+        width = int(stream["width"])
+        height = int(stream["height"])
     except Exception as exc:  # noqa: BLE001
         raise FFmpegError("Could not parse width/height from ffprobe output") from exc
 
@@ -244,13 +245,25 @@ def build_frame_replace_command(
     video_width: int,
     video_height: int,
     keep_audio: bool,
+    mode: str = "full",
+    roi_x: int = 0,
+    roi_y: int = 0,
+    roi_w: int = 0,
+    roi_h: int = 0,
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
-    filter_complex = (
-        f"[1:v]scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
-        f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2[img];"
-        f"[0:v][img]overlay=0:0:enable=between(t\\,{start_seconds:.3f}\\,{end_seconds:.3f})[v]"
-    )
+    if mode == "roi":
+        filter_complex = (
+            f"[1:v]scale={roi_w}:{roi_h}:force_original_aspect_ratio=decrease,"
+            f"pad={roi_w}:{roi_h}:(ow-iw)/2:(oh-ih)/2[img];"
+            f"[0:v][img]overlay={roi_x}:{roi_y}:enable='between(t,{start_seconds:.3f},{end_seconds:.3f})'[v]"
+        )
+    else:
+        filter_complex = (
+            f"[1:v]scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
+            f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2[img];"
+            f"[0:v][img]overlay=0:0:enable='between(t,{start_seconds:.3f},{end_seconds:.3f})'[v]"
+        )
 
     command = [
         options.ffmpeg_path,
@@ -279,10 +292,29 @@ def build_frame_replace_command(
     if keep_audio:
         command += ["-c:a", "copy"]
     else:
-        command += ["-an"]
+        command += ["-c:a", "aac", "-b:a", "192k"]
 
     command.append(output_file)
     return command
+
+
+def build_extract_frame_preview_command(
+    ffmpeg_path: str,
+    input_path: str,
+    output_png: str,
+    at_seconds: float,
+) -> list[str]:
+    return [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{at_seconds:.3f}",
+        "-i",
+        input_path,
+        "-frames:v",
+        "1",
+        output_png,
+    ]
 
 
 def build_audio_command(

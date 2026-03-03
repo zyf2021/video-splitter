@@ -11,6 +11,7 @@ class JobStatus(str, Enum):
     PROCESSING = "Processing"
     DONE = "Done"
     DONE_NO_AUDIO = "Done (no audio)"
+    SKIPPED = "Skipped"
     ERROR = "Error"
     CANCELLED = "Cancelled"
 
@@ -54,7 +55,13 @@ class Job:
 class FrameReplaceJob(Job):
     replacement_image: str = ""
     start_time: str = ""
+    start_s: float = 0.0
     end_time: str = ""
+    mode: str = "full"  # full|roi
+    roi_x: int = 0
+    roi_y: int = 0
+    roi_w: int = 0
+    roi_h: int = 0
     keep_audio: bool = True
     also_extract_audio: bool = False
     also_extract_frames: bool = False

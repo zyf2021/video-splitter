@@ -6,6 +6,7 @@ from typing import Callable
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -15,8 +16,9 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
-    QDoubleSpinBox,
+    QToolBox,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +50,17 @@ class PomodoroTab(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        root.addWidget(scroll)
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        scroll.setWidget(page)
+
+        self.sections = QToolBox()
+        page_layout.addWidget(self.sections)
+
         assets_group = QGroupBox("Inputs (assets)")
         assets = QGridLayout(assets_group)
         self.bg_title_edit = self._path_row(assets, 0, "Title background")
@@ -67,8 +80,12 @@ class PomodoroTab(QWidget):
         self.final_sec_spin = QSpinBox(); self.final_sec_spin.setRange(1, 120); self.final_sec_spin.setValue(5)
         self.skip_last_break = QCheckBox("Не делать последний Break")
         for label, widget in [
-            ("Work minutes", self.work_spin), ("Break minutes", self.break_spin), ("Cycles", self.cycles_spin),
-            ("Title duration sec", self.title_sec_spin), ("Instruction duration sec", self.instruction_sec_spin), ("Final duration sec", self.final_sec_spin),
+            ("Work minutes", self.work_spin),
+            ("Break minutes", self.break_spin),
+            ("Cycles", self.cycles_spin),
+            ("Title duration sec", self.title_sec_spin),
+            ("Instruction duration sec", self.instruction_sec_spin),
+            ("Final duration sec", self.final_sec_spin),
         ]:
             timing.addRow(label, widget)
         timing.addRow(self.skip_last_break)
@@ -82,8 +99,12 @@ class PomodoroTab(QWidget):
         self.object_y = QSpinBox(); self.object_y.setRange(0, 10000); self.object_y.setValue(220)
         self.object_scale = QSpinBox(); self.object_scale.setRange(10, 400); self.object_scale.setValue(100)
         self.progress_arc = QCheckBox("Показывать прогресс дугой"); self.progress_arc.setChecked(True)
-        timer.addRow("Timer x", self.timer_x); timer.addRow("Timer y", self.timer_y); timer.addRow("Timer diameter", self.timer_d)
-        timer.addRow("Object x", self.object_x); timer.addRow("Object y", self.object_y); timer.addRow("Object scale %", self.object_scale)
+        timer.addRow("Timer x", self.timer_x)
+        timer.addRow("Timer y", self.timer_y)
+        timer.addRow("Timer diameter", self.timer_d)
+        timer.addRow("Object x", self.object_x)
+        timer.addRow("Object y", self.object_y)
+        timer.addRow("Object scale %", self.object_scale)
         timer.addRow(self.progress_arc)
 
         text_group = QGroupBox("Text settings")
@@ -95,9 +116,12 @@ class PomodoroTab(QWidget):
         self.final_text_edit = QLineEdit("YOU DID IT!")
         self.instruction_text_edit = QLineEdit("Get ready")
         self.session_num_cb = QCheckBox("Session numbering on"); self.session_num_cb.setChecked(True)
-        text.addRow("Title text", self.title_edit); text.addRow("Session label", self.session_edit)
-        text.addRow("Work label", self.work_label_edit); text.addRow("Break label", self.break_label_edit)
-        text.addRow("Final text", self.final_text_edit); text.addRow("Instruction text", self.instruction_text_edit)
+        text.addRow("Title text", self.title_edit)
+        text.addRow("Session label", self.session_edit)
+        text.addRow("Work label", self.work_label_edit)
+        text.addRow("Break label", self.break_label_edit)
+        text.addRow("Final text", self.final_text_edit)
+        text.addRow("Instruction text", self.instruction_text_edit)
         text.addRow(self.session_num_cb)
 
         beep_group = QGroupBox("Beep settings")
@@ -106,7 +130,10 @@ class PomodoroTab(QWidget):
         self.beep_freq = QSpinBox(); self.beep_freq.setRange(100, 3000); self.beep_freq.setValue(1000)
         self.beep_dur = QSpinBox(); self.beep_dur.setRange(50, 2000); self.beep_dur.setValue(200)
         self.beep_vol = QDoubleSpinBox(); self.beep_vol.setDecimals(2); self.beep_vol.setSingleStep(0.05); self.beep_vol.setRange(0.0, 1.0); self.beep_vol.setValue(0.2)
-        beep.addRow(self.beep_enable); beep.addRow("Frequency", self.beep_freq); beep.addRow("Duration ms", self.beep_dur); beep.addRow("Volume", self.beep_vol)
+        beep.addRow(self.beep_enable)
+        beep.addRow("Frequency", self.beep_freq)
+        beep.addRow("Duration ms", self.beep_dur)
+        beep.addRow("Volume", self.beep_vol)
 
         output_group = QGroupBox("Output")
         out = QGridLayout(output_group)
@@ -128,12 +155,15 @@ class PomodoroTab(QWidget):
         out.addWidget(self.keep_temp_cb, 4, 0, 1, 3)
         out.addLayout(row_btn, 5, 0, 1, 3)
 
-        root.addWidget(assets_group)
-        root.addWidget(timing_group)
-        root.addWidget(timer_group)
-        root.addWidget(text_group)
-        root.addWidget(beep_group)
-        root.addWidget(output_group)
+        self.sections.addItem(assets_group, "1) Assets")
+        self.sections.addItem(timing_group, "2) Timing")
+        self.sections.addItem(timer_group, "3) Timer")
+        self.sections.addItem(text_group, "4) Text")
+        self.sections.addItem(beep_group, "5) Beep")
+        self.sections.addItem(output_group, "6) Output")
+        self.sections.setCurrentIndex(0)
+
+        page_layout.addStretch(1)
 
         self.generate_video_btn.clicked.connect(lambda: self._enqueue(False))
         self.generate_cover_btn.clicked.connect(lambda: self._enqueue(True))

@@ -83,14 +83,30 @@ def build_audio_scene_command(
     scene: Scene,
     output_audio: str,
     duration: float,
+    playback_speed: float = 1.0,
     overwrite: bool = True,
 ) -> list[str]:
+    audio_filters: list[str] = []
+    speed = max(0.25, min(4.0, playback_speed))
+    if abs(speed - 1.0) > 1e-6:
+        if speed < 0.5:
+            audio_filters.append("atempo=0.5")
+            speed *= 2.0
+        elif speed > 2.0:
+            audio_filters.append("atempo=2.0")
+            speed /= 2.0
+        audio_filters.append(f"atempo={speed:.4f}")
+
     if scene.audio_path:
-        return [
+        cmd = [
             ffmpeg_path,
             _overwrite_flag(overwrite),
             "-i",
             scene.audio_path,
+        ]
+        if audio_filters:
+            cmd += ["-af", ",".join(audio_filters)]
+        cmd += [
             "-t",
             f"{duration:.3f}",
             "-vn",
@@ -104,6 +120,7 @@ def build_audio_scene_command(
             "192k",
             output_audio,
         ]
+        return cmd
     return [
         ffmpeg_path,
         _overwrite_flag(overwrite),

@@ -467,6 +467,7 @@ class ProcessingWorker(QObject):
             fps=job.fps,
             timing_mode=job.timing_mode,
             scale_mode=job.scale_mode,
+            playback_speed=job.playback_speed,
             transitions=job.transitions,
             keep_temp=job.keep_temp,
             keep_scene_clips=job.keep_scene_clips,
@@ -501,7 +502,7 @@ class ProcessingWorker(QObject):
         for i, scene in enumerate(project.scenes, start=1):
             if not Path(scene.slide_path).exists():
                 raise FFmpegError(f"Scene {i}: slide not found")
-            duration = scene_duration(project, scene)
+            duration = scene_duration(project, scene) / max(0.25, min(4.0, project.settings.playback_speed))
             if duration <= 0:
                 raise FFmpegError(f"Scene {i}: invalid duration")
 
@@ -513,7 +514,7 @@ class ProcessingWorker(QObject):
 
         self._log(f"[{job.output_name}] Step 3/7: render scene clips")
         for idx_scene, scene in enumerate(project.scenes):
-            duration = scene_duration(project, scene)
+            duration = scene_duration(project, scene) / max(0.25, min(4.0, project.settings.playback_speed))
             clip_output = temp_dir / f"scene_{idx_scene+1:03d}.mp4"
             scene_cmd = build_scene_clip_command(
                 self.options.ffmpeg_path,
@@ -532,7 +533,14 @@ class ProcessingWorker(QObject):
                 shutil.copy2(clip_output, scenes_dir / clip_output.name)
 
             audio_output = audio_tmp_dir / f"audio_{idx_scene+1:03d}.m4a"
-            audio_cmd = build_audio_scene_command(self.options.ffmpeg_path, scene, str(audio_output), duration, overwrite=True)
+            audio_cmd = build_audio_scene_command(
+                self.options.ffmpeg_path,
+                scene,
+                str(audio_output),
+                duration,
+                playback_speed=project.settings.playback_speed,
+                overwrite=True,
+            )
             self._run_ffmpeg(audio_cmd, duration, index, job, 0.5, 0.25 / total_scenes)
             audio_clips.append(audio_output)
 

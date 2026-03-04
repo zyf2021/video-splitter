@@ -95,6 +95,7 @@ class SlideVideoJob(Job):
     fps: int = 30
     timing_mode: str = "duration"  # duration|timecodes
     scale_mode: str = "fill"  # fill|fit
+    playback_speed: float = 1.0
     transitions: bool = False
     keep_temp: bool = False
     keep_scene_clips: bool = False

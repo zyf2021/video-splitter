@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -27,6 +31,8 @@ from PyQt6.QtWidgets import (
 
 from core.ffmpeg import FFmpegError, is_image_file, probe_duration, validate_binaries
 from core.jobs import ProcessingOptions, SlideSceneSpec, SlideVideoJob
+from core.slide_video.builder import build_scene_clip_command
+from core.slide_video.models import Scene
 from core.slide_video.models import RESOLUTION_PRESETS
 from core.slide_video.motions import motion_names
 from core.slide_video.project_io import load_project, save_project
@@ -38,11 +44,13 @@ class SlideVideoTab(QWidget):
         add_job_callback: Callable[[SlideVideoJob], None],
         options_callback: Callable[[], ProcessingOptions],
         log_callback: Callable[[str], None],
+        start_processing_callback: Callable[[], None],
     ):
         super().__init__()
         self._add_job_callback = add_job_callback
         self._options_callback = options_callback
         self._log_callback = log_callback
+        self._start_processing_callback = start_processing_callback
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -125,9 +133,11 @@ class SlideVideoTab(QWidget):
         self.save_project_btn = QPushButton("Save Project")
         self.load_project_btn = QPushButton("Load Project")
         self.add_to_queue_btn = QPushButton("Добавить в очередь")
+        self.generate_btn = QPushButton("Сгенерировать результат")
         action_row.addWidget(self.save_project_btn)
         action_row.addWidget(self.load_project_btn)
         action_row.addWidget(self.add_to_queue_btn)
+        action_row.addWidget(self.generate_btn)
 
         root.addWidget(mode_group)
         root.addWidget(QLabel("Сцены"))
@@ -144,12 +154,13 @@ class SlideVideoTab(QWidget):
         self.move_down_btn.clicked.connect(lambda: self._move_scene(1))
         self.autofill_btn.clicked.connect(self._autofill_durations)
         self.output_folder_btn.clicked.connect(self._pick_output_folder)
-        self.preview_btn.clicked.connect(self._update_preview)
+        self.preview_btn.clicked.connect(self._generate_scene_preview)
         self.scene_table.itemSelectionChanged.connect(self._update_preview)
         self.mode_buttons.buttonClicked.connect(self._refresh_mode_columns)
         self.save_project_btn.clicked.connect(self._save_project)
         self.load_project_btn.clicked.connect(self._load_project)
         self.add_to_queue_btn.clicked.connect(self._enqueue_job)
+        self.generate_btn.clicked.connect(self._generate_result)
 
         self._refresh_mode_columns()
 
@@ -235,15 +246,32 @@ class SlideVideoTab(QWidget):
         if not ok:
             QMessageBox.warning(self, "FFmpeg", error)
             return
+        current_start = 0.0
         for row in range(self.scene_table.rowCount()):
             audio = self.scene_table.item(row, 2).text().strip() if self.scene_table.item(row, 2) else ""
+            duration = None
             if not audio:
+                if self._is_timecode_mode():
+                    try:
+                        current_start = float((self.scene_table.item(row, 5).text() if self.scene_table.item(row, 5) else str(current_start)).replace(",", "."))
+                    except ValueError:
+                        current_start += 3.0
                 continue
             try:
-                duration = probe_duration(options.ffprobe_path, audio)
+                duration = max(0.1, probe_duration(options.ffprobe_path, audio))
             except FFmpegError:
+                duration = None
+
+            if duration is None:
                 continue
-            self.scene_table.item(row, 3).setText(f"{max(0.1, duration):.3f}")
+
+            self.scene_table.item(row, 3).setText(f"{duration:.3f}")
+            if self._is_timecode_mode():
+                start = current_start
+                end = current_start + duration
+                self.scene_table.item(row, 4).setText(f"{start:.3f}")
+                self.scene_table.item(row, 5).setText(f"{end:.3f}")
+                current_start = end
 
     def _update_preview(self) -> None:
         row = self._selected_row()
@@ -253,6 +281,54 @@ class SlideVideoTab(QWidget):
         slide = self.scene_table.item(row, 1).text() if self.scene_table.item(row, 1) else ""
         motion = self.scene_table.cellWidget(row, 6).currentText()
         self.preview_label.setText(f"Preview: {Path(slide).name} | motion={motion}")
+
+    def _generate_scene_preview(self) -> None:
+        row = self._selected_row()
+        if row < 0:
+            QMessageBox.warning(self, "Preview", "Выберите сцену для предпросмотра")
+            return
+
+        options = self._options_callback()
+        ok, error = validate_binaries(options.ffmpeg_path, options.ffprobe_path)
+        if not ok:
+            QMessageBox.warning(self, "FFmpeg", error)
+            return
+
+        slide = self.scene_table.item(row, 1).text().strip()
+        if not slide or not Path(slide).is_file():
+            QMessageBox.warning(self, "Preview", "Слайд не найден")
+            return
+
+        motion = self.scene_table.cellWidget(row, 6).currentText()
+        width, height = RESOLUTION_PRESETS[self.resolution_combo.currentText()]
+        preview_duration = 3.0
+
+        with tempfile.TemporaryDirectory(prefix="slide_preview_") as tmpdir:
+            preview_path = Path(tmpdir) / f"scene_{row+1:03d}_preview.mp4"
+            cmd = build_scene_clip_command(
+                options.ffmpeg_path,
+                Scene(slide_path=slide, motion=motion),
+                str(preview_path),
+                width,
+                height,
+                self.fps_spin.value(),
+                preview_duration,
+                self.scale_mode_combo.currentData(),
+                overwrite=True,
+            )
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0 or not preview_path.exists():
+                message = result.stderr.strip() or "Не удалось сгенерировать предпросмотр"
+                QMessageBox.warning(self, "Preview", message)
+                self._log_callback(message)
+                return
+
+            saved_preview = Path.cwd() / f"scene_{row+1:03d}_preview.mp4"
+            saved_preview.write_bytes(preview_path.read_bytes())
+
+        self._log_callback(f"Preview generated: {saved_preview}")
+        self.preview_label.setText(f"Preview: {saved_preview.name}")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(saved_preview)))
 
     def _is_timecode_mode(self) -> bool:
         return self.mode_timecodes_radio.isChecked()
@@ -302,11 +378,11 @@ class SlideVideoTab(QWidget):
                     return False, "Сцены с timecodes пересекаются"
         return True, ""
 
-    def _enqueue_job(self) -> None:
+    def _enqueue_job(self) -> bool:
         valid, error = self._validate()
         if not valid:
             QMessageBox.warning(self, "Validation", error)
-            return
+            return False
 
         input_anchor = self.scene_table.item(0, 1).text().strip()
         timing_mode = "timecodes" if self._is_timecode_mode() else "duration"
@@ -325,6 +401,11 @@ class SlideVideoTab(QWidget):
         )
         self._add_job_callback(job)
         self._log_callback(f"Slide-video job queued: {job.output_name}, scenes={len(job.scenes)}")
+        return True
+
+    def _generate_result(self) -> None:
+        if self._enqueue_job():
+            self._start_processing_callback()
 
     def _serialize_job(self) -> SlideVideoJob:
         return SlideVideoJob(

@@ -173,6 +173,7 @@ class MainWindow(QMainWindow):
             self.add_slide_video_job,
             self._collect_options,
             self._append_log,
+            self.start_processing,
         )
         self.pomodoro_tab = PomodoroTab(self.add_pomodoro_job, self._append_log, self.stop_processing)
         self.tabs.addTab(self.frame_replace_tab, "Замена кадра")

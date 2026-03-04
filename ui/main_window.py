@@ -419,8 +419,16 @@ class MainWindow(QMainWindow):
         if not self.jobs:
             QMessageBox.information(self, "Queue is empty", "Please add at least one video file")
             return
-        if self._thread and self._thread.isRunning():
-            return
+
+        if self._thread is not None:
+            try:
+                if self._thread.isRunning():
+                    return
+            except RuntimeError:
+                # Underlying Qt object can be deleted after deleteLater().
+                pass
+            self._thread = None
+            self._worker = None
 
         options = self._collect_options()
         if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs) and not options.logo_path:
@@ -441,10 +449,13 @@ class MainWindow(QMainWindow):
         self._worker.signals.queue_progress.connect(self._update_queue_progress)
         self._worker.signals.finished.connect(self._on_finished)
         self._worker.signals.finished.connect(self._thread.quit)
+        self._thread.finished.connect(self._on_thread_finished)
         self._thread.finished.connect(self._thread.deleteLater)
 
         self.start_btn.setEnabled(False)
         self.frame_replace_tab.start_btn.setEnabled(False)
+        self.slide_video_tab.generate_btn.setEnabled(False)
+        self.slide_video_tab.add_to_queue_btn.setEnabled(False)
         self.pomodoro_tab.generate_video_btn.setEnabled(False)
         self.pomodoro_tab.generate_cover_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -472,6 +483,8 @@ class MainWindow(QMainWindow):
     def _on_finished(self, summary: dict) -> None:
         self.start_btn.setEnabled(True)
         self.frame_replace_tab.start_btn.setEnabled(True)
+        self.slide_video_tab.generate_btn.setEnabled(True)
+        self.slide_video_tab.add_to_queue_btn.setEnabled(True)
         self.pomodoro_tab.generate_video_btn.setEnabled(True)
         self.pomodoro_tab.generate_cover_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -488,6 +501,10 @@ class MainWindow(QMainWindow):
 
         self._append_log(message)
         QMessageBox.information(self, "Processing finished", message)
+
+    def _on_thread_finished(self) -> None:
+        self._thread = None
+        self._worker = None
 
     def open_output_folder(self) -> None:
         target = self.output_folder_edit.text().strip()

@@ -26,6 +26,7 @@ from core.ffmpeg import (
     validate_binaries,
 )
 from core.jobs import FrameReplaceJob, Job, JobStatus, ProcessingOptions, SlideVideoJob
+from core.jobs import PomodoroVideoJob
 from core.timecode import TimecodeError, parse_timecode_to_seconds
 from core.slide_video.builder import (
     build_audio_concat_command,
@@ -38,6 +39,16 @@ from core.slide_video.builder import (
 )
 from core.slide_video.models import Project, ProjectSettings, Scene
 from core.slide_video.project_io import save_project
+from core.pomodoro.ffmpeg_builder import (
+    build_beep_audio_command,
+    build_concat_command,
+    build_mux_command as build_pomodoro_mux_command,
+    build_scene_clip_command as build_pomodoro_scene_clip_command,
+)
+from core.pomodoro.models import PomodoroProject
+from core.pomodoro.project_io import save_assets_used
+from core.pomodoro.timeline import build_timeline
+from core.pomodoro.timer_render import render_timer_sequence
 
 
 class WorkerSignals(QObject):
@@ -96,6 +107,8 @@ class ProcessingWorker(QObject):
                     self._process_frame_replace_job(idx, job)
                 elif isinstance(job, SlideVideoJob):
                     self._process_slide_video_job(idx, job)
+                elif isinstance(job, PomodoroVideoJob):
+                    self._process_pomodoro_job(idx, job)
                 else:
                     self._process_logo_job(idx, job)
 
@@ -131,7 +144,148 @@ class ProcessingWorker(QObject):
         self.signals.finished.emit({"ok": done_count, "error": error_count, "cancelled": cancelled_count})
 
     def _has_logo_jobs(self) -> bool:
-        return any(not isinstance(job, (FrameReplaceJob, SlideVideoJob)) for job in self.jobs)
+        return any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs)
+
+    def _process_pomodoro_job(self, index: int, job: PomodoroVideoJob) -> None:
+        self._prepare_job(index, job)
+        project = PomodoroProject(
+            output_root=job.output_root,
+            output_name=job.output_name,
+            settings=job.settings,
+            assets=job.assets,
+            text=job.text,
+            timer=job.timer,
+            beep=job.beep,
+        )
+        timeline = build_timeline(project)
+        output_root = Path(job.output_root) if job.output_root else Path(job.input_path).parent
+        project_dir = make_unique_dir(output_root / project.display_name)
+        ensure_output_dir(project_dir)
+        temp_dir = project_dir / "temp"
+        timer_dir = temp_dir / "timer_frames"
+        clips_dir = temp_dir / "clips"
+        ensure_output_dir(timer_dir)
+        ensure_output_dir(clips_dir)
+
+        self._log(f"[{job.output_name}] Step 1/9: validate assets")
+        for p in [project.assets.bg_title, project.assets.bg_player, project.assets.bg_final, project.assets.object_image]:
+            if not Path(p).is_file():
+                raise FFmpegError(f"Asset not found: {p}")
+
+        self._log(f"[{job.output_name}] Step 2/9: prepare timer frames")
+        for i, scene in enumerate(timeline.scenes):
+            if scene.show_timer:
+                scene_timer_dir = timer_dir / f"scene_{i+1:03d}"
+                render_timer_sequence(
+                    output_dir=scene_timer_dir,
+                    fps=project.settings.fps,
+                    duration_sec=scene.duration,
+                    diameter=project.timer.diameter,
+                    ring_color=project.timer.ring_color,
+                    progress_color=project.timer.progress_color,
+                    text_color=project.timer.text_color,
+                    show_progress_arc=project.timer.show_progress_arc,
+                )
+
+        if job.generate_cover_only:
+            self._log(f"[{job.output_name}] Step 3/9: generate cover only")
+            cover_path = project_dir / "cover.png"
+            title_scene = timeline.scenes[0]
+            cover_cmd = build_pomodoro_scene_clip_command(
+                self.options.ffmpeg_path,
+                project,
+                title_scene,
+                str(cover_path),
+                timer_dir=None,
+                overwrite=True,
+                single_frame=True,
+            )
+            self._run_ffmpeg(cover_cmd, 1.0, index, job, 0.1, 0.8)
+            save_assets_used(project, str(project_dir / "assets_used.json"))
+            if not project.settings.keep_temp and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            job.outputs.extend([str(cover_path), str(project_dir / "assets_used.json")])
+            self._finalize_job(index, job, project_dir, no_audio=False)
+            return
+
+        self._log(f"[{job.output_name}] Step 3/9: render scene clips")
+        clip_paths: list[Path] = []
+        for i, scene in enumerate(timeline.scenes):
+            clip_path = clips_dir / f"clip_{i+1:03d}.mp4"
+            this_timer_dir = (timer_dir / f"scene_{i+1:03d}") if scene.show_timer else None
+            cmd = build_pomodoro_scene_clip_command(self.options.ffmpeg_path, project, scene, str(clip_path), this_timer_dir)
+            self._run_ffmpeg(cmd, scene.duration, index, job, 0.1, 0.45 / max(1, len(timeline.scenes)))
+            clip_paths.append(clip_path)
+
+        self._log(f"[{job.output_name}] Step 4/9: concat video")
+        video_no_audio = temp_dir / "video_no_audio.mp4"
+        self._run_ffmpeg(
+            build_concat_command(self.options.ffmpeg_path, [str(p) for p in clip_paths], str(video_no_audio), True),
+            timeline.total_duration,
+            index,
+            job,
+            0.56,
+            0.14,
+        )
+
+        self._log(f"[{job.output_name}] Step 5/9: build beep audio")
+        final_output = project_dir / "final.mp4"
+        if project.beep.enabled and timeline.beep_events_sec:
+            beep_audio = temp_dir / "beep_track.m4a"
+            self._run_ffmpeg(
+                build_beep_audio_command(
+                    self.options.ffmpeg_path,
+                    timeline.total_duration,
+                    timeline.beep_events_sec,
+                    project.beep.frequency,
+                    project.beep.duration_ms,
+                    project.beep.volume,
+                    str(beep_audio),
+                    True,
+                ),
+                timeline.total_duration,
+                index,
+                job,
+                0.7,
+                0.14,
+            )
+            self._log(f"[{job.output_name}] Step 6/9: mux final")
+            self._run_ffmpeg(
+                build_pomodoro_mux_command(self.options.ffmpeg_path, str(video_no_audio), str(beep_audio), str(final_output), True),
+                timeline.total_duration,
+                index,
+                job,
+                0.84,
+                0.1,
+            )
+        else:
+            self._log(f"[{job.output_name}] Step 6/9: write video without audio")
+            shutil.copy2(video_no_audio, final_output)
+            job.progress = 94
+            self.signals.job_updated.emit(index, job)
+
+        self._log(f"[{job.output_name}] Step 7/9: generate cover")
+        cover_path = project_dir / "cover.png"
+        cover_cmd = build_pomodoro_scene_clip_command(
+            self.options.ffmpeg_path,
+            project,
+            timeline.scenes[0],
+            str(cover_path),
+            timer_dir=None,
+            overwrite=True,
+            single_frame=True,
+        )
+        self._run_ffmpeg(cover_cmd, 1.0, index, job, 0.94, 0.04)
+
+        self._log(f"[{job.output_name}] Step 8/9: save metadata")
+        save_assets_used(project, str(project_dir / "assets_used.json"))
+
+        self._log(f"[{job.output_name}] Step 9/9: cleanup")
+        if not project.settings.keep_temp and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        job.outputs.extend([str(final_output), str(cover_path), str(project_dir / "assets_used.json")])
+        self._finalize_job(index, job, project_dir, no_audio=not project.beep.enabled)
 
     def request_stop(self) -> None:
         self._stop_requested = True

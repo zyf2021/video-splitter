@@ -40,6 +40,7 @@ class ProjectSettings:
     fps: int = 30
     timing_mode: str = TIMING_MODE_DURATION
     scale_mode: str = "fill"
+    playback_speed: float = 1.0
     transitions: bool = False
     keep_temp: bool = False
     keep_scene_clips: bool = False
@@ -56,7 +57,8 @@ class Project:
 
     @property
     def total_duration(self) -> float:
-        return sum(scene.effective_duration(self.settings.timing_mode) for scene in self.scenes)
+        speed = max(0.25, min(4.0, self.settings.playback_speed))
+        return sum(scene.effective_duration(self.settings.timing_mode) / speed for scene in self.scenes)
 
     @property
     def display_name(self) -> str:

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QDoubleSpinBox,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -103,6 +104,12 @@ class SlideVideoTab(QWidget):
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 120)
         self.fps_spin.setValue(30)
+        self.playback_speed_spin = QDoubleSpinBox()
+        self.playback_speed_spin.setRange(0.25, 4.0)
+        self.playback_speed_spin.setDecimals(2)
+        self.playback_speed_spin.setSingleStep(0.05)
+        self.playback_speed_spin.setValue(1.0)
+        self.playback_speed_spin.setSuffix("x")
         self.transitions_checkbox = QCheckBox("Добавлять плавные переходы (crossfade)")
         self.keep_temp_checkbox = QCheckBox("Оставить temp")
         self.keep_scene_clips_checkbox = QCheckBox("Сохранять клипы сцен")
@@ -118,9 +125,11 @@ class SlideVideoTab(QWidget):
         output_grid.addWidget(self.scale_mode_combo, 3, 1, 1, 2)
         output_grid.addWidget(QLabel("FPS"), 4, 0)
         output_grid.addWidget(self.fps_spin, 4, 1, 1, 2)
-        output_grid.addWidget(self.transitions_checkbox, 5, 0, 1, 3)
-        output_grid.addWidget(self.keep_temp_checkbox, 6, 0, 1, 3)
-        output_grid.addWidget(self.keep_scene_clips_checkbox, 7, 0, 1, 3)
+        output_grid.addWidget(QLabel("Скорость видео"), 5, 0)
+        output_grid.addWidget(self.playback_speed_spin, 5, 1, 1, 2)
+        output_grid.addWidget(self.transitions_checkbox, 6, 0, 1, 3)
+        output_grid.addWidget(self.keep_temp_checkbox, 7, 0, 1, 3)
+        output_grid.addWidget(self.keep_scene_clips_checkbox, 8, 0, 1, 3)
 
         preview_group = QGroupBox("Preview")
         preview_layout = QFormLayout(preview_group)
@@ -394,6 +403,7 @@ class SlideVideoTab(QWidget):
             fps=self.fps_spin.value(),
             timing_mode=timing_mode,
             scale_mode=self.scale_mode_combo.currentData(),
+            playback_speed=self.playback_speed_spin.value(),
             transitions=self.transitions_checkbox.isChecked(),
             keep_temp=self.keep_temp_checkbox.isChecked(),
             keep_scene_clips=self.keep_scene_clips_checkbox.isChecked(),
@@ -416,6 +426,7 @@ class SlideVideoTab(QWidget):
             fps=self.fps_spin.value(),
             timing_mode="timecodes" if self._is_timecode_mode() else "duration",
             scale_mode=self.scale_mode_combo.currentData(),
+            playback_speed=self.playback_speed_spin.value(),
             transitions=self.transitions_checkbox.isChecked(),
             keep_temp=self.keep_temp_checkbox.isChecked(),
             keep_scene_clips=self.keep_scene_clips_checkbox.isChecked(),
@@ -435,6 +446,7 @@ class SlideVideoTab(QWidget):
                 "fps": job.fps,
                 "timing_mode": job.timing_mode,
                 "scale_mode": job.scale_mode,
+                "playback_speed": job.playback_speed,
                 "transitions": job.transitions,
                 "keep_temp": job.keep_temp,
                 "keep_scene_clips": job.keep_scene_clips,
@@ -461,6 +473,7 @@ class SlideVideoTab(QWidget):
         self.resolution_combo.setCurrentText(project.settings.resolution_preset)
         self.fps_spin.setValue(project.settings.fps)
         self.scale_mode_combo.setCurrentIndex(0 if project.settings.scale_mode == "fill" else 1)
+        self.playback_speed_spin.setValue(max(0.25, min(4.0, project.settings.playback_speed)))
         self.transitions_checkbox.setChecked(project.settings.transitions)
         self.keep_temp_checkbox.setChecked(project.settings.keep_temp)
         self.keep_scene_clips_checkbox.setChecked(project.settings.keep_scene_clips)

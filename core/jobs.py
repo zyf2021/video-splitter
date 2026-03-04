@@ -5,6 +5,14 @@ from enum import Enum
 from pathlib import Path
 from typing import List
 
+from core.pomodoro.models import (
+    PomodoroAssets,
+    PomodoroBeepSettings,
+    PomodoroSettings,
+    PomodoroTextSettings,
+    PomodoroTimerSettings,
+)
+
 
 class JobStatus(str, Enum):
     QUEUED = "Queued"
@@ -91,3 +99,15 @@ class SlideVideoJob(Job):
     keep_temp: bool = False
     keep_scene_clips: bool = False
     scenes: list[SlideSceneSpec] = field(default_factory=list)
+
+
+@dataclass
+class PomodoroVideoJob(Job):
+    output_root: str = ""
+    output_name: str = "pomodoro_video"
+    generate_cover_only: bool = False
+    settings: PomodoroSettings = field(default_factory=PomodoroSettings)
+    assets: PomodoroAssets = field(default_factory=PomodoroAssets)
+    text: PomodoroTextSettings = field(default_factory=PomodoroTextSettings)
+    timer: PomodoroTimerSettings = field(default_factory=PomodoroTimerSettings)
+    beep: PomodoroBeepSettings = field(default_factory=PomodoroBeepSettings)

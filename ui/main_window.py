@@ -42,9 +42,10 @@ from core.ffmpeg import (
     is_logo_file,
     is_video_file,
 )
-from core.jobs import FrameReplaceJob, Job, ProcessingOptions, SlideVideoJob
+from core.jobs import FrameReplaceJob, Job, PomodoroVideoJob, ProcessingOptions, SlideVideoJob
 from core.worker import ProcessingWorker
 from ui.tabs.frame_replace_tab import FrameReplaceTab
+from ui.tabs.pomodoro_tab import PomodoroTab
 from ui.tabs.slide_video_tab import SlideVideoTab
 
 
@@ -173,8 +174,10 @@ class MainWindow(QMainWindow):
             self._collect_options,
             self._append_log,
         )
+        self.pomodoro_tab = PomodoroTab(self.add_pomodoro_job, self._append_log, self.stop_processing)
         self.tabs.addTab(self.frame_replace_tab, "Замена кадра")
         self.tabs.addTab(self.slide_video_tab, "Слайд-видео")
+        self.tabs.addTab(self.pomodoro_tab, "Pomodoro Video")
         layout.addWidget(self.tabs)
 
         self.log_edit = QPlainTextEdit()
@@ -331,6 +334,9 @@ class MainWindow(QMainWindow):
     def add_slide_video_job(self, job: SlideVideoJob) -> None:
         self._add_job(job)
 
+    def add_pomodoro_job(self, job: PomodoroVideoJob) -> None:
+        self._add_job(job)
+
     def _add_job(self, job: Job) -> None:
         if not isinstance(job, SlideVideoJob):
             if any(Path(existing.input_path) == Path(job.input_path) and type(existing) is type(job) for existing in self.jobs):
@@ -342,6 +348,8 @@ class MainWindow(QMainWindow):
             title = f"[FrameReplace] {job.filename}"
         elif isinstance(job, SlideVideoJob):
             title = f"[SlideVideo] {job.output_name}"
+        elif isinstance(job, PomodoroVideoJob):
+            title = f"[Pomodoro] {job.output_name}"
         else:
             title = job.filename
         self.queue_table.setItem(row, 0, QTableWidgetItem(title))
@@ -414,7 +422,7 @@ class MainWindow(QMainWindow):
             return
 
         options = self._collect_options()
-        if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob)) for job in self.jobs) and not options.logo_path:
+        if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs) and not options.logo_path:
             QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
             return
 
@@ -436,7 +444,10 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.frame_replace_tab.start_btn.setEnabled(False)
+        self.pomodoro_tab.generate_video_btn.setEnabled(False)
+        self.pomodoro_tab.generate_cover_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.pomodoro_tab.stop_btn.setEnabled(True)
         self._thread.start()
 
     def stop_processing(self) -> None:
@@ -460,7 +471,10 @@ class MainWindow(QMainWindow):
     def _on_finished(self, summary: dict) -> None:
         self.start_btn.setEnabled(True)
         self.frame_replace_tab.start_btn.setEnabled(True)
+        self.pomodoro_tab.generate_video_btn.setEnabled(True)
+        self.pomodoro_tab.generate_cover_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.pomodoro_tab.stop_btn.setEnabled(False)
         message = f"Done: {summary['ok']}\nErrors: {summary['error']}\nCancelled: {summary['cancelled']}"
 
         error_jobs = [job for job in self.jobs if job.status.value == "Error" and job.error_message]

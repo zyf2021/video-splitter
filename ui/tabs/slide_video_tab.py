@@ -207,9 +207,20 @@ class SlideVideoTab(QWidget):
         row = self._selected_row()
         if row < 0:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Select audio", "", "Audio (*.mp3 *.m4a *.wav)")
-        if path:
-            self.scene_table.item(row, 2).setText(path)
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select audio", "", "Audio (*.mp3 *.m4a *.wav)")
+        if not paths:
+            return
+
+        available_rows = self.scene_table.rowCount() - row
+        if len(paths) > available_rows:
+            QMessageBox.information(
+                self,
+                "Audio",
+                "Выбрано больше аудио, чем доступно сцен. Лишние файлы будут проигнорированы.",
+            )
+
+        for offset, path in enumerate(paths[:available_rows]):
+            self.scene_table.item(row + offset, 2).setText(path)
 
     def _delete_scene(self) -> None:
         row = self._selected_row()

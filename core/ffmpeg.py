@@ -13,10 +13,41 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
 LOGO_EXTENSIONS = {".png", ".webp"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
-LOGO_LEFT = 1100
-LOGO_TOP = 660
+LOGO_LEFT = 1750
+LOGO_TOP = 1040
 LOGO_WIDTH = 140
-LOGO_HEIGHT = 20
+LOGO_HEIGHT = 40
+
+
+def fit_logo_rect(video_width: int, video_height: int, strict_inside: bool = False) -> tuple[int, int, int, int]:
+    """Return logo rectangle clamped to current video dimensions.
+
+    strict_inside=True keeps the rectangle strictly inside the frame bounds,
+    which avoids ffmpeg delogo failures on bottom/right borders.
+    """
+    width = max(1, min(LOGO_WIDTH, video_width))
+    height = max(1, min(LOGO_HEIGHT, video_height))
+    x = max(0, min(LOGO_LEFT, video_width - 1))
+    y = max(0, min(LOGO_TOP, video_height - 1))
+
+    if x + width > video_width:
+        x = max(0, video_width - width)
+    if y + height > video_height:
+        y = max(0, video_height - height)
+
+    if strict_inside:
+        if x + width >= video_width:
+            if x > 0:
+                x -= 1
+            elif width > 1:
+                width -= 1
+        if y + height >= video_height:
+            if y > 0:
+                y -= 1
+            elif height > 1:
+                height -= 1
+
+    return x, y, width, height
 
 
 class FFmpegError(RuntimeError):
@@ -165,11 +196,13 @@ def build_overlay_command(
     input_path: str,
     logo_path: str,
     output_file: str,
+    logo_rect: tuple[int, int, int, int] = (LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT),
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    logo_left, logo_top, logo_width, logo_height = logo_rect
     filter_complex = (
-        f"[1:v]scale={LOGO_WIDTH}:{LOGO_HEIGHT}:force_original_aspect_ratio=decrease[lg];"
-        f"[0:v][lg]overlay={LOGO_LEFT}:{LOGO_TOP}:format=auto[v]"
+        f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease[lg];"
+        f"[0:v][lg]overlay={logo_left}:{logo_top}:format=auto[v]"
     )
 
     return [
@@ -202,12 +235,14 @@ def build_delogo_overlay_command(
     input_path: str,
     logo_path: str,
     output_file: str,
+    logo_rect: tuple[int, int, int, int] = (LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT),
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
+    logo_left, logo_top, logo_width, logo_height = logo_rect
     filter_complex = (
-        f"[0:v]delogo=x={LOGO_LEFT}:y={LOGO_TOP}:w={LOGO_WIDTH}:h={LOGO_HEIGHT}:show=0[v0];"
-        f"[1:v]scale={LOGO_WIDTH}:{LOGO_HEIGHT}:force_original_aspect_ratio=decrease[lg];"
-        f"[v0][lg]overlay={LOGO_LEFT}:{LOGO_TOP}:format=auto[v]"
+        f"[0:v]delogo=x={logo_left}:y={logo_top}:w={logo_width}:h={logo_height}:show=0[v0];"
+        f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease[lg];"
+        f"[v0][lg]overlay={logo_left}:{logo_top}:format=auto[v]"
     )
 
     return [

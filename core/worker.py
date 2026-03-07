@@ -17,6 +17,7 @@ from core.ffmpeg import (
     build_frames_command,
     build_overlay_command,
     ensure_output_dir,
+    fit_logo_rect,
     has_audio_stream,
     is_logo_file,
     make_unique_dir,
@@ -611,12 +612,17 @@ class ProcessingWorker(QObject):
         input_path: Path,
         processed_video: Path,
     ) -> None:
+        video_width, video_height = probe_video_size(self.options.ffprobe_path, str(input_path))
+        overlay_rect = fit_logo_rect(video_width, video_height)
+        delogo_rect = fit_logo_rect(video_width, video_height, strict_inside=True)
+
         if self.options.remove_old_logo:
             cmd = build_delogo_overlay_command(
                 self.options,
                 str(input_path),
                 self.options.logo_path,
                 str(processed_video),
+                logo_rect=delogo_rect,
             )
         else:
             cmd = build_overlay_command(
@@ -624,6 +630,7 @@ class ProcessingWorker(QObject):
                 str(input_path),
                 self.options.logo_path,
                 str(processed_video),
+                logo_rect=overlay_rect,
             )
 
         try:

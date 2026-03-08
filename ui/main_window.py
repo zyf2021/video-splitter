@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
 
         self.fs_model = QFileSystemModel(self)
-        self.fs_model.setRootPath(QDir.rootPath())
+        self.fs_model.setRootPath(QDir.homePath())
         self.fs_model.setFilter(QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot)
 
         self.tree = QTreeView()

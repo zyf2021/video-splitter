@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from core.ffmpeg import detect_ffmpeg, ffprobe_from_ffmpeg
-
 
 def run_test_mode() -> int:
+    from core.ffmpeg import detect_ffmpeg, ffprobe_from_ffmpeg
     from core.jobs import Job, ProcessingOptions
     from core.worker import ProcessingWorker
 
@@ -54,6 +54,25 @@ def run_test_mode() -> int:
 
 
 
+def _maybe_relaunch_outside_pycharm_debugger() -> int | None:
+    """On Windows/PyCharm, relaunch without debugger to bypass native 0xC0000409 crashes."""
+    if os.name != "nt":
+        return None
+    if os.environ.get("PYCHARM_HOSTED") != "1":
+        return None
+    if os.environ.get("VIDEO_SPLITTER_CHILD") == "1":
+        return None
+
+    env = os.environ.copy()
+    env["VIDEO_SPLITTER_CHILD"] = "1"
+    env["PYDEVD_USE_CYTHON"] = "NO"
+    env["PYCHARM_HOSTED"] = "0"
+
+    cmd = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
+    result = subprocess.run(cmd, env=env, check=False)
+    return result.returncode
+
+
 def _startup_log(enabled: bool, message: str) -> None:
     if not enabled:
         return
@@ -77,6 +96,10 @@ def _configure_windows_qt_runtime() -> None:
 
 
 def main() -> int:
+    relaunched_code = _maybe_relaunch_outside_pycharm_debugger()
+    if relaunched_code is not None:
+        return relaunched_code
+
     _configure_windows_qt_runtime()
 
     parser = argparse.ArgumentParser(description="Video Splitter")

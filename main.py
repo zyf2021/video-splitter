@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from core.ffmpeg import detect_ffmpeg, ffprobe_from_ffmpeg
@@ -53,6 +54,14 @@ def run_test_mode() -> int:
 
 
 
+def _startup_log(enabled: bool, message: str) -> None:
+    if not enabled:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with Path("startup.log").open("a", encoding="utf-8") as f:
+        f.write(f"[{stamp}] {message}\n")
+
+
 def _configure_windows_qt_runtime() -> None:
     """Apply safer Qt defaults for some Windows environments.
 
@@ -72,8 +81,11 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Video Splitter")
     parser.add_argument("--safe-gui", action="store_true", help="Force extra-safe Qt software rendering mode")
+    parser.add_argument("--diag-startup", action="store_true", help="Write startup milestones to startup.log")
     parser.add_argument("--test-run", action="store_true", help="Run one-file processing without GUI")
     args = parser.parse_args()
+
+    _startup_log(args.diag_startup, "Arguments parsed")
 
     if args.safe_gui and os.name == "nt":
         os.environ["QT_OPENGL"] = "software"
@@ -81,16 +93,23 @@ def main() -> int:
         os.environ["QT_QUICK_BACKEND"] = "software"
 
     if args.test_run:
+        _startup_log(args.diag_startup, "Running in test mode")
         return run_test_mode()
 
+    _startup_log(args.diag_startup, "Importing PyQt6")
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
 
     from ui.main_window import MainWindow
 
+    _startup_log(args.diag_startup, "Configuring QApplication attributes")
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
     app = QApplication(sys.argv)
+    _startup_log(args.diag_startup, "QApplication created")
+    app.setStyle("Fusion")
+    _startup_log(args.diag_startup, "Fusion style set")
     window = MainWindow()
+    _startup_log(args.diag_startup, "MainWindow created")
     window.show()
     return app.exec()
 

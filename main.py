@@ -6,11 +6,12 @@ import sys
 from pathlib import Path
 
 from core.ffmpeg import detect_ffmpeg, ffprobe_from_ffmpeg
-from core.jobs import Job, ProcessingOptions
-from core.worker import ProcessingWorker
 
 
 def run_test_mode() -> int:
+    from core.jobs import Job, ProcessingOptions
+    from core.worker import ProcessingWorker
+
     input_file = Path("samples/input.mp4")
     output_dir = Path("samples/out")
     logo_file = Path("samples/logo.png")
@@ -64,6 +65,8 @@ def _configure_windows_qt_runtime() -> None:
 
 
 def main() -> int:
+    _configure_windows_qt_runtime()
+
     parser = argparse.ArgumentParser(description="Video Splitter")
     parser.add_argument("--test-run", action="store_true", help="Run one-file processing without GUI")
     args = parser.parse_args()
@@ -76,7 +79,6 @@ def main() -> int:
 
     from ui.main_window import MainWindow
 
-    _configure_windows_qt_runtime()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
     app = QApplication(sys.argv)
     window = MainWindow()

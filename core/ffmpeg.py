@@ -338,7 +338,7 @@ def build_frame_replace_command(
     if expression_style == "quoted":
         enable_expr = f"'between(t,{start_seconds:.3f},{end_seconds:.3f})'"
     else:
-        enable_expr = f"between(t\,{start_seconds:.3f}\,{end_seconds:.3f})"
+        enable_expr = f"between(t\\,{start_seconds:.3f}\\,{end_seconds:.3f})"
 
     if mode == "roi":
         filter_complex = (

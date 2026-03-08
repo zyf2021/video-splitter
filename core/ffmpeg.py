@@ -138,6 +138,38 @@ def probe_video_size(ffprobe_path: str, input_path: str) -> tuple[int, int]:
         raise FFmpegError("Invalid video dimensions from ffprobe")
     return width, height
 
+def probe_video_info(ffprobe_path: str, input_path: str) -> tuple[int, int, float]:
+    cmd = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height:format=duration",
+        "-of",
+        "json",
+        input_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise FFmpegError(result.stderr.strip() or "ffprobe info probe failed")
+
+    try:
+        payload = json.loads(result.stdout)
+        stream = payload["streams"][0]
+        width = int(stream["width"])
+        height = int(stream["height"])
+        duration = float(payload["format"]["duration"])
+    except Exception as exc:  # noqa: BLE001
+        raise FFmpegError("Could not parse width/height/duration from ffprobe output") from exc
+
+    if width <= 0 or height <= 0:
+        raise FFmpegError("Invalid video dimensions from ffprobe")
+    if duration < 0:
+        raise FFmpegError("Invalid duration from ffprobe")
+    return width, height, duration
+
 
 def has_audio_stream(ffprobe_path: str, input_path: str) -> bool:
     cmd = [
@@ -197,13 +229,19 @@ def build_overlay_command(
     logo_path: str,
     output_file: str,
     logo_rect: tuple[int, int, int, int] = (LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT),
+    keep_logo_aspect: bool = True,
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
     logo_left, logo_top, logo_width, logo_height = logo_rect
-    filter_complex = (
-        f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease[lg];"
-        f"[0:v][lg]overlay={logo_left}:{logo_top}:format=auto[v]"
-    )
+    if keep_logo_aspect:
+        logo_scale = (
+            f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease,"
+            f"pad={logo_width}:{logo_height}:(ow-iw)/2:(oh-ih)/2[lg]"
+        )
+    else:
+        logo_scale = f"[1:v]scale={logo_width}:{logo_height}[lg]"
+
+    filter_complex = f"{logo_scale};[0:v][lg]overlay={logo_left}:{logo_top}:format=auto[v]"
 
     return [
         options.ffmpeg_path,
@@ -236,12 +274,21 @@ def build_delogo_overlay_command(
     logo_path: str,
     output_file: str,
     logo_rect: tuple[int, int, int, int] = (LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT),
+    keep_logo_aspect: bool = True,
 ) -> list[str]:
     overwrite_flag = "-y" if options.overwrite_existing else "-n"
     logo_left, logo_top, logo_width, logo_height = logo_rect
+    if keep_logo_aspect:
+        logo_scale = (
+            f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease,"
+            f"pad={logo_width}:{logo_height}:(ow-iw)/2:(oh-ih)/2[lg]"
+        )
+    else:
+        logo_scale = f"[1:v]scale={logo_width}:{logo_height}[lg]"
+
     filter_complex = (
         f"[0:v]delogo=x={logo_left}:y={logo_top}:w={logo_width}:h={logo_height}:show=0[v0];"
-        f"[1:v]scale={logo_width}:{logo_height}:force_original_aspect_ratio=decrease[lg];"
+        f"{logo_scale};"
         f"[v0][lg]overlay={logo_left}:{logo_top}:format=auto[v]"
     )
 
@@ -339,23 +386,34 @@ def build_frame_replace_command(
     return command
 
 
+def build_extract_preview_frame_command(
+    ffmpeg_path: str,
+    input_path: str,
+    time_s: float,
+    out_png: str,
+) -> list[str]:
+    return [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{time_s:.3f}",
+        "-i",
+        input_path,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        out_png,
+    ]
+
+
 def build_extract_frame_preview_command(
     ffmpeg_path: str,
     input_path: str,
     output_png: str,
     at_seconds: float,
 ) -> list[str]:
-    return [
-        ffmpeg_path,
-        "-y",
-        "-ss",
-        f"{at_seconds:.3f}",
-        "-i",
-        input_path,
-        "-frames:v",
-        "1",
-        output_png,
-    ]
+    return build_extract_preview_frame_command(ffmpeg_path, input_path, at_seconds, output_png)
 
 
 def build_audio_command(

@@ -62,14 +62,23 @@ def _configure_windows_qt_runtime() -> None:
     if os.name != "nt":
         return
     os.environ.setdefault("QT_OPENGL", "software")
+    os.environ.setdefault("QSG_RHI_BACKEND", "software")
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
+    os.environ.setdefault("QTWEBENGINE_DISABLE_GPU", "1")
 
 
 def main() -> int:
     _configure_windows_qt_runtime()
 
     parser = argparse.ArgumentParser(description="Video Splitter")
+    parser.add_argument("--safe-gui", action="store_true", help="Force extra-safe Qt software rendering mode")
     parser.add_argument("--test-run", action="store_true", help="Run one-file processing without GUI")
     args = parser.parse_args()
+
+    if args.safe_gui and os.name == "nt":
+        os.environ["QT_OPENGL"] = "software"
+        os.environ["QSG_RHI_BACKEND"] = "software"
+        os.environ["QT_QUICK_BACKEND"] = "software"
 
     if args.test_run:
         return run_test_mode()

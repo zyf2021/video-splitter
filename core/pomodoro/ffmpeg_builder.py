@@ -72,7 +72,8 @@ def build_scene_clip_command(
         current = "[v2]"
 
     draw_chain = _drawtext(scene, project)
-    filters.append(f"{current}{',' + ','.join(draw_chain) if draw_chain else ''},format=yuv420p[vout]")
+    stage_filters = draw_chain + ["format=yuv420p[vout]"]
+    filters.append(f"{current}{','.join(stage_filters)}")
 
     cmd += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
     if single_frame:

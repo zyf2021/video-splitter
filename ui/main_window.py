@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from PyQt6.QtCore import QDir, QSettings, QThread
@@ -207,7 +208,7 @@ class MainWindow(QMainWindow):
         logo_row_layout.addWidget(self.logo_browse_btn)
 
         self.logo_coords_edit = QLineEdit(f"x={LOGO_LEFT}, y={LOGO_TOP}, w={LOGO_WIDTH}, h={LOGO_HEIGHT}")
-        self.logo_coords_edit.setReadOnly(True)
+        self.logo_coords_edit.setPlaceholderText("x=1750, y=1040, w=140, h=40 или 1750,1040,140,40")
         self.delogo_checkbox = QCheckBox("Удалять старую эмблему (delogo)")
         self.delogo_checkbox.setChecked(True)
         logo_layout.addRow("Logo file", logo_row)
@@ -280,6 +281,7 @@ class MainWindow(QMainWindow):
         self.output_folder_edit.setText(str(self.settings.value("output_folder", "")))
         self.save_next_checkbox.setChecked(self.settings.value("save_next", False, type=bool))
         self.logo_file_edit.setText(str(self.settings.value("logo_path", "")))
+        self.logo_coords_edit.setText(str(self.settings.value("logo_coords", self.logo_coords_edit.text())))
         self.delogo_checkbox.setChecked(self.settings.value("remove_old_logo", True, type=bool))
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -291,6 +293,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("output_folder", self.output_folder_edit.text().strip())
         self.settings.setValue("save_next", self.save_next_checkbox.isChecked())
         self.settings.setValue("logo_path", self.logo_file_edit.text().strip())
+        self.settings.setValue("logo_coords", self.logo_coords_edit.text().strip())
         self.settings.setValue("remove_old_logo", self.delogo_checkbox.isChecked())
 
     def _on_tree_double_click(self, index) -> None:
@@ -398,6 +401,7 @@ class MainWindow(QMainWindow):
 
     def _collect_options(self) -> ProcessingOptions:
         ffmpeg_path = self.ffmpeg_path_edit.text().strip() or "ffmpeg"
+        logo_left, logo_top, logo_width, logo_height = self._parse_logo_coordinates()
         return ProcessingOptions(
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_from_ffmpeg(ffmpeg_path),
@@ -413,7 +417,33 @@ class MainWindow(QMainWindow):
             resize_mode=self.resize_combo.currentText(),
             logo_path=self.logo_file_edit.text().strip(),
             remove_old_logo=self.delogo_checkbox.isChecked(),
+            logo_left=logo_left,
+            logo_top=logo_top,
+            logo_width=logo_width,
+            logo_height=logo_height,
         )
+
+    def _parse_logo_coordinates(self) -> tuple[int, int, int, int]:
+        raw = self.logo_coords_edit.text().strip()
+        if not raw:
+            return LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT
+
+        named = {
+            key.lower(): int(value)
+            for key, value in re.findall(r"([xywhXYWH])\s*=\s*(-?\d+)", raw)
+        }
+        if all(key in named for key in ("x", "y", "w", "h")):
+            x, y, w, h = named["x"], named["y"], named["w"], named["h"]
+        else:
+            values = [int(v) for v in re.findall(r"-?\d+", raw)]
+            if len(values) < 4:
+                raise ValueError("Неверный формат координат. Используйте: x=1750, y=1040, w=140, h=40")
+            x, y, w, h = values[:4]
+
+        if w <= 0 or h <= 0:
+            raise ValueError("Ширина и высота эмблемы должны быть больше 0")
+
+        return max(0, x), max(0, y), w, h
 
     def start_processing(self) -> None:
         if not self.jobs:
@@ -430,7 +460,11 @@ class MainWindow(QMainWindow):
             self._thread = None
             self._worker = None
 
-        options = self._collect_options()
+        try:
+            options = self._collect_options()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Coordinates", str(exc))
+            return
         if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs) and not options.logo_path:
             QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
             return

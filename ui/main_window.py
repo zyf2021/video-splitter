@@ -176,7 +176,12 @@ class MainWindow(QMainWindow):
             self._append_log,
             self.start_processing,
         )
-        self.pomodoro_tab = PomodoroTab(self.add_pomodoro_job, self._append_log, self.stop_processing)
+        self.pomodoro_tab = PomodoroTab(
+            self.add_pomodoro_job,
+            self._append_log,
+            self.start_processing,
+            self.stop_processing,
+        )
         self.tabs.addTab(self.frame_replace_tab, "Замена кадра")
         self.tabs.addTab(self.slide_video_tab, "Слайд-видео")
         self.tabs.addTab(self.pomodoro_tab, "Pomodoro Video")
@@ -342,7 +347,7 @@ class MainWindow(QMainWindow):
         self._add_job(job)
 
     def _add_job(self, job: Job) -> None:
-        if not isinstance(job, SlideVideoJob):
+        if not isinstance(job, (SlideVideoJob, PomodoroVideoJob)):
             if any(Path(existing.input_path) == Path(job.input_path) and type(existing) is type(job) for existing in self.jobs):
                 return
         self.jobs.append(job)

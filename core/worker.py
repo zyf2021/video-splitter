@@ -173,22 +173,8 @@ class ProcessingWorker(QObject):
             if not Path(p).is_file():
                 raise FFmpegError(f"Asset not found: {p}")
 
-        self._log(f"[{job.output_name}] Step 2/9: prepare timer frames")
-        for i, scene in enumerate(timeline.scenes):
-            if scene.show_timer:
-                scene_timer_dir = timer_dir / f"scene_{i+1:03d}"
-                render_timer_sequence(
-                    output_dir=scene_timer_dir,
-                    fps=project.settings.fps,
-                    duration_sec=scene.duration,
-                    diameter=project.timer.diameter,
-                    ring_color=project.timer.ring_color,
-                    progress_color=project.timer.progress_color,
-                    text_color=project.timer.text_color,
-                    show_progress_arc=project.timer.show_progress_arc,
-                )
-
         if job.generate_cover_only:
+            self._log(f"[{job.output_name}] Step 2/9: skip timer frames (cover only)")
             self._log(f"[{job.output_name}] Step 3/9: generate cover only")
             cover_path = project_dir / "cover.png"
             title_scene = timeline.scenes[0]
@@ -208,6 +194,21 @@ class ProcessingWorker(QObject):
             job.outputs.extend([str(cover_path), str(project_dir / "assets_used.json")])
             self._finalize_job(index, job, project_dir, no_audio=False)
             return
+
+        self._log(f"[{job.output_name}] Step 2/9: prepare timer frames")
+        for i, scene in enumerate(timeline.scenes):
+            if scene.show_timer:
+                scene_timer_dir = timer_dir / f"scene_{i+1:03d}"
+                render_timer_sequence(
+                    output_dir=scene_timer_dir,
+                    fps=project.settings.fps,
+                    duration_sec=scene.duration,
+                    diameter=project.timer.diameter,
+                    ring_color=project.timer.ring_color,
+                    progress_color=project.timer.progress_color,
+                    text_color=project.timer.text_color,
+                    show_progress_arc=project.timer.show_progress_arc,
+                )
 
         self._log(f"[{job.output_name}] Step 3/9: render scene clips")
         clip_paths: list[Path] = []

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
-from PyQt6.QtCore import QDir, QSettings, QSignalBlocker, QThread
-from PyQt6.QtGui import QDesktopServices, QFileSystemModel, QPixmap
+from PyQt6.QtCore import QDir, QSettings, QThread
+from PyQt6.QtGui import QDesktopServices, QFileSystemModel
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -39,22 +37,16 @@ from core.ffmpeg import (
     LOGO_TOP,
     LOGO_WIDTH,
     VIDEO_EXTENSIONS,
-    build_extract_preview_frame_command,
     detect_ffmpeg,
     ffprobe_from_ffmpeg,
     is_logo_file,
     is_video_file,
-    probe_video_info,
-    validate_binaries,
-    FFmpegError,
 )
 from core.jobs import FrameReplaceJob, Job, PomodoroVideoJob, ProcessingOptions, SlideVideoJob
-from core.timecode import TimecodeError, parse_timecode_to_seconds
 from core.worker import ProcessingWorker
 from ui.tabs.frame_replace_tab import FrameReplaceTab
 from ui.tabs.pomodoro_tab import PomodoroTab
 from ui.tabs.slide_video_tab import SlideVideoTab
-from ui.widgets.video_frame_preview import VideoFramePreviewWidget
 
 
 class MainWindow(QMainWindow):
@@ -68,10 +60,6 @@ class MainWindow(QMainWindow):
         self._worker: ProcessingWorker | None = None
 
         self.settings = QSettings("VideoSplitter", "VideoSplitter")
-        self._logo_video_size: tuple[int, int] | None = None
-        self._logo_video_duration: float = 0.0
-        self._preview_temp_dir = Path("temp") / "preview"
-        self._preview_frame_path = self._preview_temp_dir / "preview_frame.png"
 
         self._build_ui()
         self._load_settings()
@@ -97,7 +85,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
 
         self.fs_model = QFileSystemModel(self)
-        self.fs_model.setRootPath(QDir.homePath())
+        self.fs_model.setRootPath(QDir.rootPath())
         self.fs_model.setFilter(QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot)
 
         self.tree = QTreeView()
@@ -218,73 +206,13 @@ class MainWindow(QMainWindow):
         logo_row_layout.addWidget(self.logo_file_edit)
         logo_row_layout.addWidget(self.logo_browse_btn)
 
-        self.logo_video_edit = QLineEdit()
-        self.logo_video_browse_btn = QPushButton("Выбрать...")
-        self.logo_video_from_queue_btn = QPushButton("Из очереди")
-        video_row = QWidget()
-        video_row_layout = QHBoxLayout(video_row)
-        video_row_layout.setContentsMargins(0, 0, 0, 0)
-        video_row_layout.addWidget(self.logo_video_edit)
-        video_row_layout.addWidget(self.logo_video_browse_btn)
-        video_row_layout.addWidget(self.logo_video_from_queue_btn)
-
-        coords_widget = QWidget()
-        coords_layout = QGridLayout(coords_widget)
-        coords_layout.setContentsMargins(0, 0, 0, 0)
-        self.logo_x_spin = QSpinBox()
-        self.logo_y_spin = QSpinBox()
-        self.logo_w_spin = QSpinBox()
-        self.logo_h_spin = QSpinBox()
-        for spin in (self.logo_x_spin, self.logo_y_spin, self.logo_w_spin, self.logo_h_spin):
-            spin.setRange(0, 100000)
-            spin.valueChanged.connect(self._on_logo_geometry_changed)
-        self.logo_x_spin.setValue(LOGO_LEFT)
-        self.logo_y_spin.setValue(LOGO_TOP)
-        self.logo_w_spin.setValue(LOGO_WIDTH)
-        self.logo_h_spin.setValue(LOGO_HEIGHT)
-        coords_layout.addWidget(QLabel("X"), 0, 0)
-        coords_layout.addWidget(self.logo_x_spin, 0, 1)
-        coords_layout.addWidget(QLabel("Y"), 0, 2)
-        coords_layout.addWidget(self.logo_y_spin, 0, 3)
-        coords_layout.addWidget(QLabel("W"), 1, 0)
-        coords_layout.addWidget(self.logo_w_spin, 1, 1)
-        coords_layout.addWidget(QLabel("H"), 1, 2)
-        coords_layout.addWidget(self.logo_h_spin, 1, 3)
-
-        self.keep_aspect_checkbox = QCheckBox("Сохранять пропорции")
-        self.keep_aspect_checkbox.setChecked(True)
+        self.logo_coords_edit = QLineEdit(f"x={LOGO_LEFT}, y={LOGO_TOP}, w={LOGO_WIDTH}, h={LOGO_HEIGHT}")
+        self.logo_coords_edit.setReadOnly(True)
         self.delogo_checkbox = QCheckBox("Удалять старую эмблему (delogo)")
         self.delogo_checkbox.setChecked(True)
-
-        preview_group = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_group)
-        self.preview_widget = VideoFramePreviewWidget()
-        self.preview_widget.setMinimumHeight(280)
-        self.coords_label = QLabel("Coords: —")
-        self.video_size_label = QLabel("Video size: -")
-        self.geometry_status_label = QLabel("Geometry: -")
-        self.geometry_status_label.setStyleSheet("color: #666;")
-        preview_controls = QHBoxLayout()
-        self.refresh_frame_btn = QPushButton("Обновить кадр")
-        self.frame_time_edit = QLineEdit("00:00:01.000")
-        self.show_frame_btn = QPushButton("Показать")
-        preview_controls.addWidget(self.refresh_frame_btn)
-        preview_controls.addWidget(QLabel("Время кадра"))
-        preview_controls.addWidget(self.frame_time_edit)
-        preview_controls.addWidget(self.show_frame_btn)
-
-        preview_layout.addWidget(self.preview_widget)
-        preview_layout.addWidget(self.coords_label)
-        preview_layout.addWidget(self.video_size_label)
-        preview_layout.addWidget(self.geometry_status_label)
-        preview_layout.addLayout(preview_controls)
-
         logo_layout.addRow("Logo file", logo_row)
-        logo_layout.addRow("Input video", video_row)
-        logo_layout.addRow("Geometry", coords_widget)
-        logo_layout.addRow(self.keep_aspect_checkbox)
+        logo_layout.addRow("Coordinates", self.logo_coords_edit)
         logo_layout.addRow(self.delogo_checkbox)
-        logo_layout.addRow(preview_group)
 
         audio_group = QGroupBox("Audio extraction")
         audio_layout = QFormLayout(audio_group)
@@ -341,14 +269,6 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         self.logo_browse_btn.clicked.connect(self.browse_logo)
-        self.logo_video_browse_btn.clicked.connect(self.browse_logo_video)
-        self.logo_video_from_queue_btn.clicked.connect(self._fill_logo_video_from_queue)
-        self.logo_video_edit.editingFinished.connect(self._on_logo_video_changed)
-        self.refresh_frame_btn.clicked.connect(self._refresh_logo_preview)
-        self.show_frame_btn.clicked.connect(self._refresh_logo_preview)
-        self.preview_widget.hoverPointChanged.connect(self._on_preview_hover)
-        self.preview_widget.hoverLeftImage.connect(lambda: self.coords_label.setText("Coords: —"))
-        self.preview_widget.clickedPoint.connect(self._on_preview_click)
         self.start_btn.clicked.connect(self.start_processing)
         self.stop_btn.clicked.connect(self.stop_processing)
         self.open_output_btn.clicked.connect(self.open_output_folder)
@@ -360,18 +280,10 @@ class MainWindow(QMainWindow):
         self.output_folder_edit.setText(str(self.settings.value("output_folder", "")))
         self.save_next_checkbox.setChecked(self.settings.value("save_next", False, type=bool))
         self.logo_file_edit.setText(str(self.settings.value("logo_path", "")))
-        self.logo_video_edit.setText(str(self.settings.value("logo_video_path", "")))
         self.delogo_checkbox.setChecked(self.settings.value("remove_old_logo", True, type=bool))
-        self.keep_aspect_checkbox.setChecked(self.settings.value("logo_keep_aspect", True, type=bool))
-        self.logo_x_spin.setValue(self.settings.value("logo_x", LOGO_LEFT, type=int))
-        self.logo_y_spin.setValue(self.settings.value("logo_y", LOGO_TOP, type=int))
-        self.logo_w_spin.setValue(self.settings.value("logo_w", LOGO_WIDTH, type=int))
-        self.logo_h_spin.setValue(self.settings.value("logo_h", LOGO_HEIGHT, type=int))
-        self._on_logo_video_changed()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_settings()
-        self._clear_preview_cache()
         super().closeEvent(event)
 
     def _save_settings(self) -> None:
@@ -379,13 +291,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("output_folder", self.output_folder_edit.text().strip())
         self.settings.setValue("save_next", self.save_next_checkbox.isChecked())
         self.settings.setValue("logo_path", self.logo_file_edit.text().strip())
-        self.settings.setValue("logo_video_path", self.logo_video_edit.text().strip())
         self.settings.setValue("remove_old_logo", self.delogo_checkbox.isChecked())
-        self.settings.setValue("logo_keep_aspect", self.keep_aspect_checkbox.isChecked())
-        self.settings.setValue("logo_x", self.logo_x_spin.value())
-        self.settings.setValue("logo_y", self.logo_y_spin.value())
-        self.settings.setValue("logo_w", self.logo_w_spin.value())
-        self.settings.setValue("logo_h", self.logo_h_spin.value())
 
     def _on_tree_double_click(self, index) -> None:
         path = Path(self.fs_model.filePath(index))
@@ -452,7 +358,6 @@ class MainWindow(QMainWindow):
         self.queue_table.setItem(row, 2, QTableWidgetItem("0"))
         self.queue_table.setItem(row, 3, QTableWidgetItem(""))
         self.total_progress.setMaximum(max(1, len(self.jobs)))
-        self._update_start_button_state()
 
     def selected_queue_video_path(self) -> str:
         rows = sorted({idx.row() for idx in self.queue_table.selectedIndexes()})
@@ -466,7 +371,6 @@ class MainWindow(QMainWindow):
             self.queue_table.removeRow(row)
             self.jobs.pop(row)
         self.total_progress.setMaximum(max(1, len(self.jobs)))
-        self._update_start_button_state()
 
     def clear_queue(self) -> None:
         if self._thread and self._thread.isRunning():
@@ -476,7 +380,6 @@ class MainWindow(QMainWindow):
         self.queue_table.setRowCount(0)
         self.total_progress.reset()
         self.current_progress.reset()
-        self._update_start_button_state()
 
     def browse_ffmpeg(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select ffmpeg executable", "", "Executable (*.exe);;All files (*)")
@@ -492,126 +395,6 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select logo", "", "Images (*.png *.webp)")
         if path:
             self.logo_file_edit.setText(path)
-
-    def browse_logo_video(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select preview video", "", "Video files (*.mp4 *.mov *.mkv *.avi)")
-        if path:
-            self.logo_video_edit.setText(path)
-            self._on_logo_video_changed()
-
-    def _fill_logo_video_from_queue(self) -> None:
-        path = self.selected_queue_video_path()
-        if path:
-            self.logo_video_edit.setText(path)
-            self._on_logo_video_changed()
-
-    def _on_logo_video_changed(self) -> None:
-        self._logo_video_size = None
-        self._logo_video_duration = 0.0
-        self.video_size_label.setText("Video size: -")
-        self.geometry_status_label.setText("Geometry: -")
-        video_path = Path(self.logo_video_edit.text().strip())
-        if not video_path.exists() or not video_path.is_file() or not is_video_file(video_path):
-            self.preview_widget.set_frame_pixmap(QPixmap())
-            self._sync_logo_overlay()
-            self._update_start_button_state()
-            return
-
-        options = self._collect_options()
-        ok, err = validate_binaries(options.ffmpeg_path, options.ffprobe_path)
-        if not ok:
-            self._append_log(err)
-            self.geometry_status_label.setText("Geometry: ffmpeg/ffprobe not configured")
-            self._update_start_button_state()
-            return
-
-        try:
-            w, h, duration = probe_video_info(options.ffprobe_path, str(video_path))
-        except FFmpegError as exc:
-            self._append_log(str(exc))
-            self.geometry_status_label.setText("Geometry: failed to probe video")
-            self._update_start_button_state()
-            return
-
-        self._logo_video_size = (w, h)
-        self._logo_video_duration = duration
-        self.video_size_label.setText(f"Video size: {w}x{h}")
-        self._refresh_logo_preview()
-
-    def _refresh_logo_preview(self) -> None:
-        video_path = Path(self.logo_video_edit.text().strip())
-        if not video_path.exists() or not video_path.is_file():
-            return
-        options = self._collect_options()
-        try:
-            frame_time = parse_timecode_to_seconds(self.frame_time_edit.text().strip())
-        except TimecodeError as exc:
-            QMessageBox.warning(self, "Timecode", str(exc))
-            return
-        if frame_time < 0:
-            frame_time = 0.0
-        if self._logo_video_duration > 0:
-            frame_time = min(frame_time, self._logo_video_duration)
-
-        self._preview_temp_dir.mkdir(parents=True, exist_ok=True)
-        cmd = build_extract_preview_frame_command(options.ffmpeg_path, str(video_path), frame_time, str(self._preview_frame_path))
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0 or not self._preview_frame_path.exists():
-            msg = result.stderr.strip() or "Не удалось извлечь кадр"
-            QMessageBox.warning(self, "Preview", msg)
-            self._append_log(msg)
-            return
-
-        pixmap = QPixmap(str(self._preview_frame_path))
-        self.preview_widget.set_frame_pixmap(pixmap)
-        self._sync_logo_overlay()
-        self._update_start_button_state()
-
-    def _on_preview_hover(self, x: int, y: int) -> None:
-        self.coords_label.setText(f"Coords: x={x}, y={y}")
-
-    def _on_preview_click(self, x: int, y: int) -> None:
-        with QSignalBlocker(self.logo_x_spin), QSignalBlocker(self.logo_y_spin):
-            self.logo_x_spin.setValue(x)
-            self.logo_y_spin.setValue(y)
-        self._on_logo_geometry_changed()
-
-    def _on_logo_geometry_changed(self) -> None:
-        self._sync_logo_overlay()
-        self._update_start_button_state()
-
-    def _sync_logo_overlay(self) -> None:
-        x, y, w, h = self.logo_x_spin.value(), self.logo_y_spin.value(), self.logo_w_spin.value(), self.logo_h_spin.value()
-        is_invalid = not self._is_logo_geometry_valid()
-        self.preview_widget.set_overlay_rect(x, y, w, h, invalid=is_invalid)
-        error_style = "QSpinBox { border: 1px solid #d93025; }"
-        normal_style = ""
-        for spin in (self.logo_x_spin, self.logo_y_spin, self.logo_w_spin, self.logo_h_spin):
-            spin.setStyleSheet(error_style if is_invalid else normal_style)
-        if is_invalid:
-            self.geometry_status_label.setText("Geometry: Invalid")
-            self.geometry_status_label.setStyleSheet("color: #d93025;")
-        else:
-            self.geometry_status_label.setText("Geometry: OK")
-            self.geometry_status_label.setStyleSheet("color: #188038;")
-
-    def _is_logo_geometry_valid(self) -> bool:
-        x, y, w, h = self.logo_x_spin.value(), self.logo_y_spin.value(), self.logo_w_spin.value(), self.logo_h_spin.value()
-        if x < 0 or y < 0 or w <= 0 or h <= 0:
-            return False
-        if self._logo_video_size:
-            vw, vh = self._logo_video_size
-            return x + w <= vw and y + h <= vh
-        return True
-
-    def _update_start_button_state(self) -> None:
-        has_logo_jobs = any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs)
-        can_start = (not has_logo_jobs) or self._is_logo_geometry_valid()
-        self.start_btn.setEnabled(can_start and bool(self.jobs))
-
-    def _clear_preview_cache(self) -> None:
-        if self._preview_temp_dir.exists():
-            shutil.rmtree(self._preview_temp_dir, ignore_errors=True)
 
     def _collect_options(self) -> ProcessingOptions:
         ffmpeg_path = self.ffmpeg_path_edit.text().strip() or "ffmpeg"
@@ -630,11 +413,6 @@ class MainWindow(QMainWindow):
             resize_mode=self.resize_combo.currentText(),
             logo_path=self.logo_file_edit.text().strip(),
             remove_old_logo=self.delogo_checkbox.isChecked(),
-            logo_x=self.logo_x_spin.value(),
-            logo_y=self.logo_y_spin.value(),
-            logo_w=self.logo_w_spin.value(),
-            logo_h=self.logo_h_spin.value(),
-            logo_keep_aspect=self.keep_aspect_checkbox.isChecked(),
         )
 
     def start_processing(self) -> None:
@@ -653,13 +431,9 @@ class MainWindow(QMainWindow):
             self._worker = None
 
         options = self._collect_options()
-        if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs):
-            if not options.logo_path:
-                QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
-                return
-            if not self._is_logo_geometry_valid():
-                QMessageBox.warning(self, "Invalid geometry", "Проверьте X/Y/W/H: прямоугольник должен быть внутри кадра")
-                return
+        if any(not isinstance(job, (FrameReplaceJob, SlideVideoJob, PomodoroVideoJob)) for job in self.jobs) and not options.logo_path:
+            QMessageBox.warning(self, "Logo missing", "Please select logo PNG/WEBP file")
+            return
 
         self.total_progress.setMaximum(len(self.jobs))
         self.total_progress.setValue(0)
@@ -707,7 +481,7 @@ class MainWindow(QMainWindow):
         self.total_progress.setValue(done)
 
     def _on_finished(self, summary: dict) -> None:
-        self._update_start_button_state()
+        self.start_btn.setEnabled(True)
         self.frame_replace_tab.start_btn.setEnabled(True)
         self.slide_video_tab.generate_btn.setEnabled(True)
         self.slide_video_tab.add_to_queue_btn.setEnabled(True)

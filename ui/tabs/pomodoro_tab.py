@@ -39,11 +39,13 @@ class PomodoroTab(QWidget):
         self,
         add_job_callback: Callable[[PomodoroVideoJob], None],
         log_callback: Callable[[str], None],
+        start_processing_callback: Callable[[], None] | None = None,
         stop_callback: Callable[[], None] | None = None,
     ):
         super().__init__()
         self._add_job_callback = add_job_callback
         self._log_callback = log_callback
+        self._start_processing_callback = start_processing_callback
         self._stop_callback = stop_callback
         self._build_ui()
 
@@ -165,8 +167,8 @@ class PomodoroTab(QWidget):
 
         page_layout.addStretch(1)
 
-        self.generate_video_btn.clicked.connect(lambda: self._enqueue(False))
-        self.generate_cover_btn.clicked.connect(lambda: self._enqueue(True))
+        self.generate_video_btn.clicked.connect(lambda: self._generate(False))
+        self.generate_cover_btn.clicked.connect(lambda: self._generate(True))
         self.stop_btn.clicked.connect(self._on_stop)
 
     def _on_stop(self) -> None:
@@ -210,11 +212,15 @@ class PomodoroTab(QWidget):
             return False, "Font path is invalid"
         return True, ""
 
-    def _enqueue(self, cover_only: bool) -> None:
+    def _generate(self, cover_only: bool) -> None:
+        if self._enqueue(cover_only) and self._start_processing_callback:
+            self._start_processing_callback()
+
+    def _enqueue(self, cover_only: bool) -> bool:
         ok, err = self._validate()
         if not ok:
             QMessageBox.warning(self, "Validation", err)
-            return
+            return False
 
         settings = PomodoroSettings(
             work_minutes=self.work_spin.value(),
@@ -274,3 +280,4 @@ class PomodoroTab(QWidget):
         )
         self._add_job_callback(job)
         self._log_callback(f"Pomodoro job queued: {job.output_name} (cover_only={cover_only})")
+        return True

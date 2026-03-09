@@ -613,8 +613,14 @@ class ProcessingWorker(QObject):
         processed_video: Path,
     ) -> None:
         video_width, video_height = probe_video_size(self.options.ffprobe_path, str(input_path))
-        overlay_rect = fit_logo_rect(video_width, video_height)
-        delogo_rect = fit_logo_rect(video_width, video_height, strict_inside=True)
+        preferred_rect = (
+            self.options.logo_left,
+            self.options.logo_top,
+            self.options.logo_width,
+            self.options.logo_height,
+        )
+        overlay_rect = fit_logo_rect(video_width, video_height, preferred_rect=preferred_rect)
+        delogo_rect = fit_logo_rect(video_width, video_height, strict_inside=True, preferred_rect=preferred_rect)
 
         if self.options.remove_old_logo:
             cmd = build_delogo_overlay_command(

@@ -19,16 +19,22 @@ LOGO_WIDTH = 140
 LOGO_HEIGHT = 40
 
 
-def fit_logo_rect(video_width: int, video_height: int, strict_inside: bool = False) -> tuple[int, int, int, int]:
+def fit_logo_rect(
+    video_width: int,
+    video_height: int,
+    strict_inside: bool = False,
+    preferred_rect: tuple[int, int, int, int] = (LOGO_LEFT, LOGO_TOP, LOGO_WIDTH, LOGO_HEIGHT),
+) -> tuple[int, int, int, int]:
     """Return logo rectangle clamped to current video dimensions.
 
     strict_inside=True keeps the rectangle strictly inside the frame bounds,
     which avoids ffmpeg delogo failures on bottom/right borders.
     """
-    width = max(1, min(LOGO_WIDTH, video_width))
-    height = max(1, min(LOGO_HEIGHT, video_height))
-    x = max(0, min(LOGO_LEFT, video_width - 1))
-    y = max(0, min(LOGO_TOP, video_height - 1))
+    pref_left, pref_top, pref_width, pref_height = preferred_rect
+    width = max(1, min(pref_width, video_width))
+    height = max(1, min(pref_height, video_height))
+    x = max(0, min(pref_left, video_width - 1))
+    y = max(0, min(pref_top, video_height - 1))
 
     if x + width > video_width:
         x = max(0, video_width - width)

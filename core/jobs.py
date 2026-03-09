@@ -43,6 +43,10 @@ class ProcessingOptions:
 
     logo_path: str = ""
     remove_old_logo: bool = True
+    logo_left: int = 1750
+    logo_top: int = 1040
+    logo_width: int = 140
+    logo_height: int = 40
 
 
 @dataclass

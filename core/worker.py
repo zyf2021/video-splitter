@@ -50,6 +50,14 @@ from core.pomodoro.models import PomodoroProject
 from core.pomodoro.project_io import save_assets_used
 from core.pomodoro.timeline import build_timeline
 from core.pomodoro.timer_render import render_timer_sequence
+from core.pomodoro.pipeline import generate_cover
+from core.pomodoro.defaults import (
+    DEFAULT_COVER_PATTERN,
+    DEFAULT_FONT,
+    DEFAULT_INSTRUCTION_BG,
+    DEFAULT_INSTRUCTION_TEXT,
+    DEFAULT_START_BG,
+)
 
 
 class WorkerSignals(QObject):
@@ -268,15 +276,7 @@ class ProcessingWorker(QObject):
 
         self._log(f"[{job.output_name}] Step 7/9: generate cover")
         cover_path = project_dir / "cover.png"
-        cover_cmd = build_pomodoro_scene_clip_command(
-            self.options.ffmpeg_path,
-            project,
-            timeline.scenes[0],
-            str(cover_path),
-            timer_dir=None,
-            overwrite=True,
-            single_frame=True,
-        )
+        cover_cmd = self._build_cover_cmd(project, str(cover_path))
         self._run_ffmpeg(cover_cmd, 1.0, index, job, 0.94, 0.04)
 
         self._log(f"[{job.output_name}] Step 8/9: save metadata")
@@ -288,6 +288,26 @@ class ProcessingWorker(QObject):
 
         job.outputs.extend([str(final_output), str(cover_path), str(project_dir / "assets_used.json")])
         self._finalize_job(index, job, project_dir, no_audio=not project.beep.enabled)
+
+    def _build_cover_cmd(self, project: PomodoroProject, output_cover: str) -> list[str]:
+        width, height = project.settings.resolution
+        instruction_text = project.text.instruction_text.strip() or DEFAULT_INSTRUCTION_TEXT
+        cover_bg = project.assets.bg_title or project.assets.bg_instruction or str(DEFAULT_START_BG)
+        if not Path(cover_bg).is_file():
+            cover_bg = str(DEFAULT_INSTRUCTION_BG)
+        return generate_cover(
+            ffmpeg_path=self.options.ffmpeg_path,
+            output_png=output_cover,
+            width=width,
+            height=height,
+            background_path=cover_bg,
+            font_path=project.assets.font_path or str(DEFAULT_FONT),
+            work_minutes=project.settings.work_minutes,
+            break_minutes=project.settings.break_minutes,
+            instruction_text=instruction_text,
+            title_text=project.text.video_title,
+            pattern_path=str(DEFAULT_COVER_PATTERN),
+        )
 
     def request_stop(self) -> None:
         self._stop_requested = True

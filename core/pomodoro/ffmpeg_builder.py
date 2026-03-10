@@ -49,7 +49,7 @@ def build_scene_clip_command(
     project: PomodoroProject,
     scene: PomodoroScene,
     output_file: str,
-    timer_dir: Path | None,
+    timer_video: Path | None,
     overwrite: bool = True,
     single_frame: bool = False,
 ) -> list[str]:
@@ -57,9 +57,9 @@ def build_scene_clip_command(
     fps = project.settings.fps
     cmd = [ffmpeg_path, _ow(overwrite), "-loop", "1", "-i", _scene_bg(project, scene.kind), "-i", project.assets.object_image]
 
-    has_timer = bool(scene.show_timer and timer_dir)
+    has_timer = bool(scene.show_timer and timer_video)
     if has_timer:
-        cmd += ["-framerate", str(fps), "-i", str(timer_dir / "timer_%06d.png")]
+        cmd += ["-stream_loop", "-1", "-i", str(timer_video)]
 
     filters = [
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg]",
@@ -68,7 +68,8 @@ def build_scene_clip_command(
     ]
     current = "[v1]"
     if has_timer:
-        filters.append(f"{current}[2:v]overlay={project.timer.x}:{project.timer.y}[v2]")
+        filters.append(f"[2:v]scale={project.timer.diameter}:{project.timer.diameter}[timer]")
+        filters.append(f"{current}[timer]overlay={project.timer.x}:{project.timer.y}[v2]")
         current = "[v2]"
 
     draw_chain = _drawtext(scene, project)

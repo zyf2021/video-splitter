@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -49,7 +50,15 @@ from core.pomodoro.ffmpeg_builder import (
 from core.pomodoro.models import PomodoroProject
 from core.pomodoro.project_io import save_assets_used
 from core.pomodoro.timeline import build_timeline
-from core.pomodoro.timer_render import render_timer_sequence
+from core.pomodoro.generate_animated_svg_timer import build_svg, normalize_hex_color
+from core.pomodoro.pipeline import generate_cover
+from core.pomodoro.defaults import (
+    DEFAULT_COVER_PATTERN,
+    DEFAULT_FONT,
+    DEFAULT_INSTRUCTION_BG,
+    DEFAULT_INSTRUCTION_TEXT,
+    DEFAULT_START_BG,
+)
 
 
 class WorkerSignals(QObject):
@@ -163,9 +172,7 @@ class ProcessingWorker(QObject):
         project_dir = make_unique_dir(output_root / project.display_name)
         ensure_output_dir(project_dir)
         temp_dir = project_dir / "temp"
-        timer_dir = temp_dir / "timer_frames"
         clips_dir = temp_dir / "clips"
-        ensure_output_dir(timer_dir)
         ensure_output_dir(clips_dir)
 
         self._log(f"[{job.output_name}] Step 1/9: validate assets")
@@ -183,7 +190,7 @@ class ProcessingWorker(QObject):
                 project,
                 title_scene,
                 str(cover_path),
-                timer_dir=None,
+                timer_video=None,
                 overwrite=True,
                 single_frame=True,
             )
@@ -195,28 +202,63 @@ class ProcessingWorker(QObject):
             self._finalize_job(index, job, project_dir, no_audio=False)
             return
 
-        self._log(f"[{job.output_name}] Step 2/9: prepare timer frames")
-        for i, scene in enumerate(timeline.scenes):
-            if scene.show_timer:
-                scene_timer_dir = timer_dir / f"scene_{i+1:03d}"
-                render_timer_sequence(
-                    output_dir=scene_timer_dir,
-                    fps=project.settings.fps,
-                    duration_sec=scene.duration,
-                    diameter=project.timer.diameter,
-                    ring_color=project.timer.ring_color,
-                    progress_color=project.timer.progress_color,
-                    text_color=project.timer.text_color,
-                    show_progress_arc=project.timer.show_progress_arc,
-                )
+        self._log(f"[{job.output_name}] Step 2/9: generate SVG+MP4 timers")
+        timer_videos: dict[int, Path] = {}
+        timer_scenes = [i for i, scene in enumerate(timeline.scenes) if scene.show_timer]
+        for timer_idx, i in enumerate(timer_scenes):
+            scene = timeline.scenes[i]
+            seconds = max(1, int(round(scene.duration)))
+            svg_path = temp_dir / f"timer_{i+1:03d}.svg"
+            timer_video_path = temp_dir / f"timer_{i+1:03d}.mp4"
+            svg_text = build_svg(
+                total_seconds=seconds,
+                color=normalize_hex_color(project.timer.progress_color),
+                size=project.timer.diameter,
+                ring_width=max(8, project.timer.diameter // 24),
+                font_family="Inter, Arial, sans-serif",
+                no_glow=not project.timer.show_progress_arc,
+            )
+            svg_path.write_text(svg_text, encoding="utf-8")
+            render_cmd = [
+                sys.executable,
+                "-m",
+                "core.pomodoro.render_svg_timer_to_mp4",
+                "--svg",
+                str(svg_path),
+                "--out",
+                str(timer_video_path),
+                "--duration",
+                str(seconds),
+                "--fps",
+                str(project.settings.fps),
+                "--width",
+                str(project.timer.diameter),
+                "--height",
+                str(project.timer.diameter),
+                "--timer-size",
+                str(project.timer.diameter),
+                "--smooth",
+                "true",
+                "--final-hold",
+                "0",
+            ]
+            self._run_ffmpeg(
+                render_cmd,
+                scene.duration,
+                index,
+                job,
+                0.1 + (0.2 * timer_idx / max(1, len(timer_scenes))),
+                0.2 / max(1, len(timer_scenes)),
+            )
+            timer_videos[i] = timer_video_path
 
         self._log(f"[{job.output_name}] Step 3/9: render scene clips")
         clip_paths: list[Path] = []
         for i, scene in enumerate(timeline.scenes):
             clip_path = clips_dir / f"clip_{i+1:03d}.mp4"
-            this_timer_dir = (timer_dir / f"scene_{i+1:03d}") if scene.show_timer else None
-            cmd = build_pomodoro_scene_clip_command(self.options.ffmpeg_path, project, scene, str(clip_path), this_timer_dir)
-            self._run_ffmpeg(cmd, scene.duration, index, job, 0.1, 0.45 / max(1, len(timeline.scenes)))
+            timer_video = timer_videos.get(i)
+            cmd = build_pomodoro_scene_clip_command(self.options.ffmpeg_path, project, scene, str(clip_path), timer_video)
+            self._run_ffmpeg(cmd, scene.duration, index, job, 0.3, 0.26 / max(1, len(timeline.scenes)))
             clip_paths.append(clip_path)
 
         self._log(f"[{job.output_name}] Step 4/9: concat video")
@@ -268,15 +310,7 @@ class ProcessingWorker(QObject):
 
         self._log(f"[{job.output_name}] Step 7/9: generate cover")
         cover_path = project_dir / "cover.png"
-        cover_cmd = build_pomodoro_scene_clip_command(
-            self.options.ffmpeg_path,
-            project,
-            timeline.scenes[0],
-            str(cover_path),
-            timer_dir=None,
-            overwrite=True,
-            single_frame=True,
-        )
+        cover_cmd = self._build_cover_cmd(project, str(cover_path))
         self._run_ffmpeg(cover_cmd, 1.0, index, job, 0.94, 0.04)
 
         self._log(f"[{job.output_name}] Step 8/9: save metadata")
@@ -288,6 +322,26 @@ class ProcessingWorker(QObject):
 
         job.outputs.extend([str(final_output), str(cover_path), str(project_dir / "assets_used.json")])
         self._finalize_job(index, job, project_dir, no_audio=not project.beep.enabled)
+
+    def _build_cover_cmd(self, project: PomodoroProject, output_cover: str) -> list[str]:
+        width, height = project.settings.resolution
+        instruction_text = project.text.instruction_text.strip() or DEFAULT_INSTRUCTION_TEXT
+        cover_bg = project.assets.bg_title or project.assets.bg_instruction or str(DEFAULT_START_BG)
+        if not Path(cover_bg).is_file():
+            cover_bg = str(DEFAULT_INSTRUCTION_BG)
+        return generate_cover(
+            ffmpeg_path=self.options.ffmpeg_path,
+            output_png=output_cover,
+            width=width,
+            height=height,
+            background_path=cover_bg,
+            font_path=project.assets.font_path or str(DEFAULT_FONT),
+            work_minutes=project.settings.work_minutes,
+            break_minutes=project.settings.break_minutes,
+            instruction_text=instruction_text,
+            title_text=project.text.video_title,
+            pattern_path=str(DEFAULT_COVER_PATTERN),
+        )
 
     def request_stop(self) -> None:
         self._stop_requested = True

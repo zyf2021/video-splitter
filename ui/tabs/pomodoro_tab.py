@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.jobs import PomodoroVideoJob
+from core.pomodoro.defaults import ASSETS_DIR
 from core.pomodoro.models import (
     PomodoroAssets,
     PomodoroBeepSettings,
@@ -71,6 +72,14 @@ class PomodoroTab(QWidget):
         self.bg_final_edit = self._path_row(assets, 3, "Final background")
         self.object_edit = self._path_row(assets, 4, "Object image")
         self.font_edit = self._path_row(assets, 5, "Font (TTF)")
+
+        default_bg = str(ASSETS_DIR / "bg.png")
+        default_object = str(ASSETS_DIR / "light_spfere.png")
+        self.bg_title_edit.setText(default_bg)
+        self.bg_player_edit.setText(default_bg)
+        self.bg_instruction_edit.setText(default_bg)
+        self.bg_final_edit.setText(default_bg)
+        self.object_edit.setText(default_object)
 
         timing_group = QGroupBox("Timing")
         timing = QFormLayout(timing_group)

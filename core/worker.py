@@ -713,7 +713,9 @@ class ProcessingWorker(QObject):
         progress_offset: float,
         step_weight: float,
     ) -> None:
-        ffmpeg_cmd = [command[0], "-progress", "pipe:1", "-nostats", *command[1:]]
+        executable_name = Path(command[0]).name.lower()
+        is_ffmpeg_executable = executable_name.startswith("ffmpeg")
+        ffmpeg_cmd = [command[0], "-progress", "pipe:1", "-nostats", *command[1:]] if is_ffmpeg_executable else command
         self._log(f"Running: {' '.join(ffmpeg_cmd)}")
 
         ffmpeg_lines: list[str] = []
